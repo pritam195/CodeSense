@@ -55,3 +55,24 @@ def test_parser_extracts_python_and_typescript_symbols_with_line_ranges(tmp_path
     app.dependency_overrides.clear()
     assert parsed.status_code == 200
     assert {("src/auth.py", "class", "AuthService", 3, 5), ("src/auth.py", "function", "issue_token", 4, 5), ("web/api.ts", "class", "Api", 3, 5), ("web/api.ts", "function", "handle", 4, 4)} <= {(s["path"], s["kind"], s["name"], s["start_line"], s["end_line"]) for s in symbols}
+
+def test_chunker_preserves_entire_function_and_class_boundaries(tmp_path):
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as zip_file:
+        zip_file.writestr("src/example.py", "import os\n\nclass Service:\n    def process(self):\n        return 1\n\ndef helper():\n    return 2\n")
+    client, _ = client_for(tmp_path)
+    upload_id = client.post("/api/uploads", files={"file": ("repo.zip", archive.getvalue())}).json()["id"]
+    assert client.post(f"/api/uploads/{upload_id}/scan").status_code == 200
+    assert client.post(f"/api/uploads/{upload_id}/parse").status_code == 200
+    result = client.post(f"/api/uploads/{upload_id}/chunk")
+    chunks = client.get(f"/api/uploads/{upload_id}/chunks").json()["chunks"]
+    app.dependency_overrides.clear()
+    assert result.status_code == 200
+    assert {(chunk["symbol_name"], chunk["start_line"], chunk["end_line"]) for chunk in chunks} >= {("Service", 3, 5), ("helper", 7, 8)}
+
+def test_faiss_raw_similarity_returns_the_expected_chunk(tmp_path):
+    import numpy as np
+    from app.embed import FaissIndexStore
+    index = FaissIndexStore(tmp_path)
+    index.write("repository", np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype="float32"))
+    assert index.search("repository", np.asarray([0.9, 0.1], dtype="float32"), 1) == [(0, 0.8999999761581421)]

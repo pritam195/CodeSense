@@ -3,14 +3,20 @@ from urllib.parse import urlparse
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from .config import Settings
-from .models import CodeSymbol, FileListResponse, FileMetadata, GitUploadRequest, ParseResponse, ScanResponse, SymbolListResponse, UploadListResponse, UploadResponse
+from .models import ChunkListResponse, ChunkResponse, CodeChunk, CodeSymbol, EmbeddingResponse, FileListResponse, FileMetadata, GitUploadRequest, ParseResponse, ScanResponse, SimilarityRequest, SimilarityResponse, SimilarityResult, SymbolListResponse, UploadListResponse, UploadResponse
+from .chunker import SourceSymbol, chunk_file
+from .embed import EmbeddingClient, FaissIndexStore
 from .parser import extract_symbols
 from .scanner import ScanError, scan_archive
 from .storage import UploadStore
 
 settings = Settings()
+embedding_client = EmbeddingClient(settings.embedding_model, settings.embedding_max_chars, settings.embedding_min_interval_seconds)
 app = FastAPI(title="CodeSense API", version="0.3.0")
 app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_methods=["*"], allow_headers=["*"])
+
+def get_embedding_client() -> EmbeddingClient:
+    return embedding_client
 
 def get_store() -> UploadStore:
     return UploadStore(settings.data_dir)
@@ -70,3 +76,36 @@ def list_symbols(upload_id: str, store: UploadStore = Depends(get_store)) -> Sym
     return SymbolListResponse(upload_id=upload_id, symbols=[CodeSymbol(path=path, kind=kind, name=name, start_line=start, end_line=end) for path, kind, name, start, end in store.list_symbols(upload_id)])
 
 
+@app.post("/api/uploads/{upload_id}/chunk", response_model=ChunkResponse)
+def chunk_upload(upload_id: str, store: UploadStore = Depends(get_store)) -> ChunkResponse:
+    if store.get_upload(upload_id) is None: raise HTTPException(404, "Upload not found.")
+    symbols_by_path = {}
+    for path, kind, name, start, end in store.list_symbols(upload_id):
+        symbols_by_path.setdefault(path, []).append(SourceSymbol(path, kind, name, start, end))
+    chunks = []
+    for path, _, _, content in store.list_file_metadata(upload_id):
+        chunks.extend(chunk_file(path, content, symbols_by_path.get(path, [])))
+    store.replace_chunks(upload_id, chunks)
+    return ChunkResponse(upload_id=upload_id, chunks_created=len(chunks))
+
+@app.get("/api/uploads/{upload_id}/chunks", response_model=ChunkListResponse)
+def list_chunks(upload_id: str, store: UploadStore = Depends(get_store)) -> ChunkListResponse:
+    if store.get_upload(upload_id) is None: raise HTTPException(404, "Upload not found.")
+    return ChunkListResponse(upload_id=upload_id, chunks=[CodeChunk(path=path, start_line=start, end_line=end, content=content, symbol_name=symbol_name) for path, start, end, content, symbol_name in store.list_chunks(upload_id)])
+
+
+@app.post("/api/uploads/{upload_id}/embed", response_model=EmbeddingResponse)
+def embed_upload(upload_id: str, store: UploadStore = Depends(get_store), client: EmbeddingClient = Depends(get_embedding_client)) -> EmbeddingResponse:
+    chunks = store.list_chunks(upload_id)
+    if not chunks: raise HTTPException(409, "Create chunks before embedding.")
+    vectors = client.encode_documents([chunk[3] for chunk in chunks])
+    FaissIndexStore(settings.data_dir).write(upload_id, vectors)
+    return EmbeddingResponse(upload_id=upload_id, vectors_indexed=len(chunks))
+
+@app.post("/api/uploads/{upload_id}/similarity-search", response_model=SimilarityResponse)
+def raw_similarity_search(upload_id: str, request: SimilarityRequest, store: UploadStore = Depends(get_store), client: EmbeddingClient = Depends(get_embedding_client)) -> SimilarityResponse:
+    chunks = store.list_chunks(upload_id)
+    if not chunks: raise HTTPException(409, "Create chunks before searching.")
+    try: matches = FaissIndexStore(settings.data_dir).search(upload_id, client.encode_query(request.query), request.limit)
+    except RuntimeError as error: raise HTTPException(409, "Create embeddings before searching.") from error
+    return SimilarityResponse(upload_id=upload_id, results=[SimilarityResult(path=chunks[index][0], start_line=chunks[index][1], end_line=chunks[index][2], content=chunks[index][3], score=score) for index, score in matches])
