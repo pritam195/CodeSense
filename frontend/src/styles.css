@@ -1,0 +1,7 @@
+@import "tailwindcss";
+
+@layer components {
+  .field { @apply w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-cyan-400; }
+  .tab { @apply rounded-lg px-3 py-2 text-sm text-slate-400 hover:bg-slate-800; }
+  .tab.active { @apply bg-slate-800 text-cyan-300; }
+}
