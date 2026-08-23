@@ -35,3 +35,8 @@ Completed: `POST /api/uploads/{id}/answer` retrieves the relevant FAISS chunks, 
 
 Completed: public https://github.com/owner/repository URLs are fetched only as bounded default-branch ZIP archives before the existing scan → parse → chunk → embed workflow. CodeSense never clones or executes a repository.
 
+## Phase 8 — Hybrid Retrieval
+
+Completed: `POST /api/uploads/{id}/hybrid-search` fuses BM25 keyword search (via `rank_bm25`) and FAISS vector search using Reciprocal Rank Fusion (RRF, k=60). BM25 handles exact identifier queries that vector search misses; vector search handles paraphrased/semantic queries that keyword search misses. The `/answer` endpoint now uses hybrid retrieval internally for better grounding. All FAISS endpoints now use `store.data_dir` instead of the global settings path, fixing test isolation. 11/11 tests pass.
+
+Next: Phase 9 can build an evaluation harness that measures retrieval precision/recall and latency against a hand-labeled query set.

@@ -4,7 +4,8 @@ from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile,
 from fastapi.middleware.cors import CORSMiddleware
 from .config import Settings
 from .answer import AnswerClient, AnswerError
-from .models import AnswerRequest, AnswerResponse, Citation, ChunkListResponse, ChunkResponse, CodeChunk, CodeSymbol, EmbeddingResponse, FileListResponse, FileMetadata, GitFetchResponse, GitUploadRequest, ParseResponse, ScanResponse, SimilarityRequest, SimilarityResponse, SimilarityResult, SymbolListResponse, UploadListResponse, UploadResponse
+from .bm25 import BM25Retriever, reciprocal_rank_fusion
+from .models import AnswerRequest, AnswerResponse, Citation, ChunkListResponse, ChunkResponse, CodeChunk, CodeSymbol, EmbeddingResponse, FileListResponse, FileMetadata, GitFetchResponse, GitUploadRequest, HybridSearchRequest, HybridSearchResponse, HybridSearchResult, ParseResponse, ScanResponse, SimilarityRequest, SimilarityResponse, SimilarityResult, SymbolListResponse, UploadListResponse, UploadResponse
 from .chunker import SourceSymbol, chunk_file
 from .embed import EmbeddingClient, FaissIndexStore
 from .gitfetch import GitFetchError, download_archive
@@ -116,9 +117,38 @@ def embed_upload(upload_id: str, store: UploadStore = Depends(get_store), client
 def raw_similarity_search(upload_id: str, request: SimilarityRequest, store: UploadStore = Depends(get_store), client: EmbeddingClient = Depends(get_embedding_client)) -> SimilarityResponse:
     chunks = store.list_chunks(upload_id)
     if not chunks: raise HTTPException(409, "Create chunks before searching.")
-    try: matches = FaissIndexStore(settings.data_dir).search(upload_id, client.encode_query(request.query), request.limit)
+    try: matches = FaissIndexStore(store.data_dir).search(upload_id, client.encode_query(request.query), request.limit)
     except RuntimeError as error: raise HTTPException(409, "Create embeddings before searching.") from error
     return SimilarityResponse(upload_id=upload_id, results=[SimilarityResult(path=chunks[index][0], start_line=chunks[index][1], end_line=chunks[index][2], content=chunks[index][3], score=score) for index, score in matches])
+
+@app.post("/api/uploads/{upload_id}/hybrid-search", response_model=HybridSearchResponse)
+def hybrid_search(upload_id: str, request: HybridSearchRequest, store: UploadStore = Depends(get_store), client: EmbeddingClient = Depends(get_embedding_client)) -> HybridSearchResponse:
+    """Combine FAISS vector search and BM25 keyword search via Reciprocal Rank Fusion."""
+    chunks = store.list_chunks(upload_id)
+    if not chunks: raise HTTPException(409, "Create chunks before searching.")
+    # BM25 keyword search (in-memory, no content execution)
+    bm25_matches = BM25Retriever([chunk[3] for chunk in chunks]).search(request.query, limit=request.limit * 2)
+    # Vector search
+    try:
+        vector_matches = FaissIndexStore(store.data_dir).search(upload_id, client.encode_query(request.query), request.limit * 2)
+    except RuntimeError as error:
+        raise HTTPException(409, "Create embeddings before searching.") from error
+    # Fuse with RRF
+    fused = reciprocal_rank_fusion(vector_matches, bm25_matches, limit=request.limit)
+    return HybridSearchResponse(
+        upload_id=upload_id,
+        results=[
+            HybridSearchResult(
+                path=chunks[index][0],
+                start_line=chunks[index][1],
+                end_line=chunks[index][2],
+                content=chunks[index][3],
+                symbol_name=chunks[index][4],
+                rrf_score=rrf_score,
+            )
+            for index, rrf_score in fused
+        ],
+    )
 
 @app.post("/api/uploads/{upload_id}/fetch", response_model=GitFetchResponse)
 def fetch_github_upload(upload_id: str, store: UploadStore = Depends(get_store)) -> GitFetchResponse:
@@ -135,9 +165,14 @@ def fetch_github_upload(upload_id: str, store: UploadStore = Depends(get_store))
 def answer_repository(upload_id: str, request: AnswerRequest, store: UploadStore = Depends(get_store), embeddings: EmbeddingClient = Depends(get_embedding_client), client: AnswerClient = Depends(get_answer_client)) -> AnswerResponse:
     chunks = store.list_chunks(upload_id)
     if not chunks: raise HTTPException(409, "Create chunks before answering.")
-    try: matches = FaissIndexStore(settings.data_dir).search(upload_id, embeddings.encode_query(request.question), min(request.limit, settings.answer_context_limit))
-    except RuntimeError as error: raise HTTPException(409, "Create embeddings before answering.") from error
-    contexts = [{"id": position + 1, "path": chunks[index][0], "start_line": chunks[index][1], "end_line": chunks[index][2], "content": chunks[index][3]} for position, (index, _) in enumerate(matches)]
+    # Hybrid retrieval: vector + BM25 fused with RRF
+    try:
+        vector_matches = FaissIndexStore(store.data_dir).search(upload_id, embeddings.encode_query(request.question), min(request.limit * 2, settings.answer_context_limit * 2))
+    except RuntimeError as error:
+        raise HTTPException(409, "Create embeddings before answering.") from error
+    bm25_matches = BM25Retriever([chunk[3] for chunk in chunks]).search(request.question, limit=min(request.limit * 2, settings.answer_context_limit * 2))
+    fused = reciprocal_rank_fusion(vector_matches, bm25_matches, limit=min(request.limit, settings.answer_context_limit))
+    contexts = [{"id": position + 1, "path": chunks[index][0], "start_line": chunks[index][1], "end_line": chunks[index][2], "content": chunks[index][3]} for position, (index, _) in enumerate(fused)]
     if not contexts: raise HTTPException(404, "No relevant source chunks were found.")
     try: answer, citation_ids = client.answer(request.question, contexts)
     except AnswerError as error: raise HTTPException(503, str(error)) from error

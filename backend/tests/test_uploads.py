@@ -91,3 +91,81 @@ def test_answer_client_rejects_missing_or_invalid_citations():
         pass
     else:
         assert False
+
+def test_bm25_retriever_exact_token_match():
+    """BM25 must rank the chunk containing the exact token highest."""
+    from app.bm25 import BM25Retriever
+    texts = [
+        "def authenticate_user(token): return jwt.decode(token)",
+        "class UserService: pass",
+        "import os; import sys",
+    ]
+    retriever = BM25Retriever(texts)
+    results = retriever.search("authenticate_user", limit=3)
+    assert results, "Expected at least one result"
+    assert results[0][0] == 0, "Chunk 0 (with authenticate_user) must rank first"
+
+def test_reciprocal_rank_fusion_merges_and_deduplicates():
+    """RRF must merge two lists, deduplicate, and boost items appearing in both."""
+    from app.bm25 import reciprocal_rank_fusion
+    vec_list = [(0, 0.95), (1, 0.80), (2, 0.60)]  # vector results
+    bm25_list = [(2, 12.0), (0, 8.0), (3, 5.0)]   # BM25 results
+    fused = reciprocal_rank_fusion(vec_list, bm25_list, limit=4)
+    indices = [idx for idx, _ in fused]
+    # Chunk 0 appears in both lists at high rank — must be #1 after fusion
+    assert indices[0] == 0, f"Expected chunk 0 first, got {indices}"
+    # All indices must be unique (no duplicates)
+    assert len(indices) == len(set(indices)), "RRF must deduplicate results"
+
+def test_hybrid_search_endpoint_returns_results(tmp_path):
+    """End-to-end: hybrid-search endpoint must return merged results after embed.
+
+    Uses a 4-dim stub EmbeddingClient and a matching fake FAISS index to avoid
+    loading the real sentence-transformer model in this test.
+    """
+    import io, zipfile, numpy as np
+    from app.embed import FaissIndexStore
+    from app.main import get_embedding_client
+
+    DIM = 4
+
+    class _StubEmbedClient:
+        """Returns unit vectors of dimension DIM — no model loading."""
+        def encode_query(self, text: str) -> np.ndarray:
+            v = np.ones(DIM, dtype="float32")
+            return v / np.linalg.norm(v)
+        def encode_documents(self, texts):
+            return np.eye(len(texts), DIM, dtype="float32")
+
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("src/auth.py", "def issue_jwt(user):\n    return jwt.encode({'sub': user})\n")
+        zf.writestr("src/db.py", "def get_user(user_id):\n    return db.query(user_id)\n")
+
+    client, store = client_for(tmp_path)
+    # Also override the embedding client so the endpoint uses our 4-dim stub
+    app.dependency_overrides[get_embedding_client] = lambda: _StubEmbedClient()
+
+    upload_id = client.post("/api/uploads", files={"file": ("repo.zip", archive.getvalue())}).json()["id"]
+    assert client.post(f"/api/uploads/{upload_id}/scan").status_code == 200
+    assert client.post(f"/api/uploads/{upload_id}/parse").status_code == 200
+    assert client.post(f"/api/uploads/{upload_id}/chunk").status_code == 200
+
+    # Write a fake FAISS index using the same DIM as the stub
+    chunks = store.list_chunks(upload_id)
+    n = len(chunks)
+    fake_vectors = np.eye(n, DIM, dtype="float32")
+    FaissIndexStore(tmp_path).write(upload_id, fake_vectors)
+
+    response = client.post(f"/api/uploads/{upload_id}/hybrid-search", json={"query": "issue_jwt", "limit": 5})
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["upload_id"] == upload_id
+    assert len(data["results"]) > 0
+    # BM25 must have surfaced the issue_jwt chunk — verify it appears in results
+    paths = [r["path"] for r in data["results"]]
+    assert "src/auth.py" in paths, f"Expected src/auth.py in results, got {paths}"
+
+

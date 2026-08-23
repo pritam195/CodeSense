@@ -11,4 +11,5 @@ sentence-transformers==5.2.2
 
 openai==1.109.1
 python-dotenv==1.0.1
+rank-bm25==0.2.2
 
