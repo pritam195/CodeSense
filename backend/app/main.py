@@ -5,7 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import Settings
 from .answer import AnswerClient, AnswerError
 from .bm25 import BM25Retriever, reciprocal_rank_fusion
-from .models import AnswerRequest, AnswerResponse, Citation, ChunkListResponse, ChunkResponse, CodeChunk, CodeSymbol, EmbeddingResponse, FileListResponse, FileMetadata, GitFetchResponse, GitUploadRequest, HybridSearchRequest, HybridSearchResponse, HybridSearchResult, ParseResponse, ScanResponse, SimilarityRequest, SimilarityResponse, SimilarityResult, SymbolListResponse, UploadListResponse, UploadResponse
+from .eval_api import load_default_queries, run_internal_evaluation
+from .models import AnswerRequest, AnswerResponse, Citation, ChunkListResponse, ChunkResponse, CodeChunk, CodeSymbol, EmbeddingResponse, EvalReportResponse, EvalRequest, FileListResponse, FileMetadata, GitFetchResponse, GitUploadRequest, HybridSearchRequest, HybridSearchResponse, HybridSearchResult, ParseResponse, ScanResponse, SimilarityRequest, SimilarityResponse, SimilarityResult, SymbolListResponse, UploadListResponse, UploadResponse
 from .chunker import SourceSymbol, chunk_file
 from .embed import EmbeddingClient, FaissIndexStore
 from .gitfetch import GitFetchError, download_archive
@@ -178,6 +179,21 @@ def answer_repository(upload_id: str, request: AnswerRequest, store: UploadStore
     except AnswerError as error: raise HTTPException(503, str(error)) from error
     by_id = {context["id"]: context for context in contexts}
     return AnswerResponse(upload_id=upload_id, answer=answer, citations=[Citation(path=by_id[item]["path"], start_line=by_id[item]["start_line"], end_line=by_id[item]["end_line"]) for item in citation_ids])
+
+
+@app.post("/api/uploads/{upload_id}/evaluate", response_model=EvalReportResponse)
+def evaluate_upload(
+    upload_id: str,
+    request: EvalRequest = EvalRequest(),
+    store: UploadStore = Depends(get_store),
+    client: EmbeddingClient = Depends(get_embedding_client),
+) -> EvalReportResponse:
+    """Run retrieval evaluation harness against this repository."""
+    queries = request.queries if request.queries else load_default_queries()
+    if not queries:
+        raise HTTPException(400, "No evaluation queries provided or found in default queries.json.")
+    return run_internal_evaluation(upload_id, queries, request.top_k, store, client)
+
 
 
 

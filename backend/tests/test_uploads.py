@@ -169,3 +169,105 @@ def test_hybrid_search_endpoint_returns_results(tmp_path):
     assert "src/auth.py" in paths, f"Expected src/auth.py in results, got {paths}"
 
 
+def test_eval_metrics_computation_and_overlap_matching():
+    """Test overlap detection, single query evaluation, and metric aggregation."""
+    from eval.harness import is_overlap, evaluate_query, compute_metrics
+
+    # Test is_overlap
+    assert is_overlap("src/auth.py", 1, 10, "src/auth.py", 5, 15)
+    assert is_overlap("src/auth.py", 1, 10, "src/auth.py", 10, 20)
+    assert not is_overlap("src/auth.py", 1, 10, "src/auth.py", 11, 20)
+    assert not is_overlap("src/auth.py", 1, 10, "src/db.py", 1, 10)
+
+    # Test evaluate_query hit at rank 1
+    retrieved = [
+        {"path": "src/auth.py", "start_line": 1, "end_line": 10},
+        {"path": "src/db.py", "start_line": 1, "end_line": 10},
+    ]
+    expected = [{"path": "src/auth.py", "start_line": 5, "end_line": 8}]
+    res = evaluate_query(retrieved, expected, k=2)
+    assert res["hit"] is True
+    assert res["first_hit_rank"] == 1
+    assert res["reciprocal_rank"] == 1.0
+    assert res["precision_at_k"] == 0.5
+    assert res["recall_at_k"] == 1.0
+
+    # Test evaluate_query miss
+    res_miss = evaluate_query(retrieved, [{"path": "src/other.py", "start_line": 1, "end_line": 5}], k=2)
+    assert res_miss["hit"] is False
+    assert res_miss["reciprocal_rank"] == 0.0
+
+    # Test compute_metrics aggregation
+    metrics = compute_metrics([res, res_miss], latencies_ms=[10.0, 20.0], k=2)
+    assert metrics["total_queries"] == 2
+    assert metrics["passed_queries"] == 1
+    assert metrics["failed_queries"] == 1
+    assert metrics["mrr"] == 0.5
+    assert metrics["mean_precision_at_k"] == 0.25
+    assert metrics["mean_recall_at_k"] == 0.5
+    assert metrics["latency_p50_ms"] == 15.0
+
+
+def test_evaluate_endpoint_returns_report(tmp_path):
+    """End-to-end: evaluate endpoint returns full report with metrics and queries."""
+    import io, zipfile, numpy as np
+    from app.embed import FaissIndexStore
+    from app.main import get_embedding_client
+
+    DIM = 4
+
+    class _StubEmbedClient:
+        def encode_query(self, text: str) -> np.ndarray:
+            v = np.ones(DIM, dtype="float32")
+            return v / np.linalg.norm(v)
+        def encode_documents(self, texts):
+            return np.eye(len(texts), DIM, dtype="float32")
+
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("src/auth.py", "def issue_jwt(user):\n    return jwt.encode({'sub': user})\n")
+        zf.writestr("src/db.py", "def get_user(user_id):\n    return db.query(user_id)\n")
+
+    client, store = client_for(tmp_path)
+    app.dependency_overrides[get_embedding_client] = lambda: _StubEmbedClient()
+
+    upload_id = client.post("/api/uploads", files={"file": ("repo.zip", archive.getvalue())}).json()["id"]
+    assert client.post(f"/api/uploads/{upload_id}/scan").status_code == 200
+    assert client.post(f"/api/uploads/{upload_id}/parse").status_code == 200
+    assert client.post(f"/api/uploads/{upload_id}/chunk").status_code == 200
+
+    chunks = store.list_chunks(upload_id)
+    n = len(chunks)
+    fake_vectors = np.eye(n, DIM, dtype="float32")
+    FaissIndexStore(tmp_path).write(upload_id, fake_vectors)
+
+    eval_payload = {
+        "queries": [
+            {
+                "id": "q1",
+                "question": "issue_jwt",
+                "expected": [{"path": "src/auth.py", "start_line": 1, "end_line": 3}],
+            },
+            {
+                "id": "q2",
+                "question": "nonexistent_term_xyz",
+                "expected": [{"path": "src/missing.py", "start_line": 1, "end_line": 2}],
+            },
+        ],
+        "top_k": 5,
+    }
+
+    response = client.post(f"/api/uploads/{upload_id}/evaluate", json=eval_payload)
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["upload_id"] == upload_id
+    assert data["metrics"]["total_queries"] == 2
+    assert data["metrics"]["passed_queries"] == 1
+    assert data["metrics"]["failed_queries"] == 1
+    assert len(data["failures"]) == 1
+    assert data["failures"][0]["id"] == "q2"
+
+
+

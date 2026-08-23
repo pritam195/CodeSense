@@ -1,0 +1,112 @@
+[
+  {
+    "id": "q01",
+    "question": "How does the scanner skip ignored directories?",
+    "expected": [
+      {
+        "path": "app/scanner.py",
+        "start_line": 36,
+        "end_line": 38
+      }
+    ]
+  },
+  {
+    "id": "q02",
+    "question": "Where are AST symbols extracted with Tree-sitter?",
+    "expected": [
+      {
+        "path": "app/parser.py",
+        "start_line": 9,
+        "end_line": 22
+      }
+    ]
+  },
+  {
+    "id": "q03",
+    "question": "How are chunks created from source code without splitting functions?",
+    "expected": [
+      {
+        "path": "app/chunker.py",
+        "start_line": 13,
+        "end_line": 28
+      }
+    ]
+  },
+  {
+    "id": "q04",
+    "question": "Where is the FAISS vector index written and searched?",
+    "expected": [
+      {
+        "path": "app/embed.py",
+        "start_line": 27,
+        "end_line": 33
+      }
+    ]
+  },
+  {
+    "id": "q05",
+    "question": "How does BM25 keyword search work?",
+    "expected": [
+      {
+        "path": "app/bm25.py",
+        "start_line": 10,
+        "end_line": 27
+      }
+    ]
+  },
+  {
+    "id": "q06",
+    "question": "How is reciprocal rank fusion implemented?",
+    "expected": [
+      {
+        "path": "app/bm25.py",
+        "start_line": 30,
+        "end_line": 56
+      }
+    ]
+  },
+  {
+    "id": "q07",
+    "question": "How is the OpenAI or Gemini client configured for answers?",
+    "expected": [
+      {
+        "path": "app/answer.py",
+        "start_line": 7,
+        "end_line": 49
+      }
+    ]
+  },
+  {
+    "id": "q08",
+    "question": "Where is SQLite database table schema initialized?",
+    "expected": [
+      {
+        "path": "app/storage.py",
+        "start_line": 11,
+        "end_line": 16
+      }
+    ]
+  },
+  {
+    "id": "q09",
+    "question": "How are GitHub repositories fetched as zip archives?",
+    "expected": [
+      {
+        "path": "app/gitfetch.py",
+        "start_line": 1,
+        "end_line": 40
+      }
+    ]
+  },
+  {
+    "id": "q10",
+    "question": "Where are CORS origins and file extension settings defined?",
+    "expected": [
+      {
+        "path": "app/config.py",
+        "start_line": 7,
+        "end_line": 27
+      }
+    ]
+  }
+]

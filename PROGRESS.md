@@ -39,4 +39,9 @@ Completed: public https://github.com/owner/repository URLs are fetched only as b
 
 Completed: `POST /api/uploads/{id}/hybrid-search` fuses BM25 keyword search (via `rank_bm25`) and FAISS vector search using Reciprocal Rank Fusion (RRF, k=60). BM25 handles exact identifier queries that vector search misses; vector search handles paraphrased/semantic queries that keyword search misses. The `/answer` endpoint now uses hybrid retrieval internally for better grounding. All FAISS endpoints now use `store.data_dir` instead of the global settings path, fixing test isolation. 11/11 tests pass.
 
-Next: Phase 9 can build an evaluation harness that measures retrieval precision/recall and latency against a hand-labeled query set.
+## Phase 9 — Evaluation Harness
+
+Completed: Built an evaluation harness that measures Precision@k, Recall@k, MRR (Mean Reciprocal Rank), and latency (p50/p95) against a hand-labeled query set. Ships with a seed benchmark (`eval/queries.json`), a standalone CLI (`eval/harness.py`), and a `POST /api/uploads/{id}/evaluate` endpoint with structured reporting and failure analysis. 13/13 tests pass.
+
+Next: Phase 10 (Track C) can build a call graph across the repository using Tree-sitter AST symbols.
+
