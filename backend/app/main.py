@@ -5,8 +5,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import Settings
 from .answer import AnswerClient, AnswerError
 from .bm25 import BM25Retriever, reciprocal_rank_fusion
+from .callgraph import build_call_graph
 from .eval_api import load_default_queries, run_internal_evaluation
-from .models import AnswerRequest, AnswerResponse, Citation, ChunkListResponse, ChunkResponse, CodeChunk, CodeSymbol, EmbeddingResponse, EvalReportResponse, EvalRequest, FileListResponse, FileMetadata, GitFetchResponse, GitUploadRequest, HybridSearchRequest, HybridSearchResponse, HybridSearchResult, ParseResponse, ScanResponse, SimilarityRequest, SimilarityResponse, SimilarityResult, SymbolListResponse, UploadListResponse, UploadResponse
+from .models import AnswerRequest, AnswerResponse, CallGraphBuildResponse, CallGraphEdge, CallGraphResponse, Citation, ChunkListResponse, ChunkResponse, CodeChunk, CodeSymbol, EmbeddingResponse, EvalReportResponse, EvalRequest, FileListResponse, FileMetadata, GitFetchResponse, GitUploadRequest, HybridSearchRequest, HybridSearchResponse, HybridSearchResult, ParseResponse, ScanResponse, SimilarityRequest, SimilarityResponse, SimilarityResult, SymbolListResponse, UploadListResponse, UploadResponse
 from .chunker import SourceSymbol, chunk_file
 from .embed import EmbeddingClient, FaissIndexStore
 from .gitfetch import GitFetchError, download_archive
@@ -193,6 +194,47 @@ def evaluate_upload(
     if not queries:
         raise HTTPException(400, "No evaluation queries provided or found in default queries.json.")
     return run_internal_evaluation(upload_id, queries, request.top_k, store, client)
+
+
+@app.post("/api/uploads/{upload_id}/call-graph", response_model=CallGraphBuildResponse)
+def build_upload_call_graph(upload_id: str, store: UploadStore = Depends(get_store)) -> CallGraphBuildResponse:
+    """Extract and build repository call graph using Tree-sitter static analysis."""
+    if store.get_upload(upload_id) is None:
+        raise HTTPException(404, "Upload not found.")
+    files = store.list_file_metadata(upload_id)
+    symbols_raw = store.list_symbols(upload_id)
+    symbols_by_path: dict[str, list[tuple[str, str, int, int]]] = {}
+    for path, kind, name, start, end in symbols_raw:
+        symbols_by_path.setdefault(path, []).append((kind, name, start, end))
+    edges = build_call_graph(files, symbols_by_path)
+    store.replace_call_graph(upload_id, edges)
+    return CallGraphBuildResponse(upload_id=upload_id, edges_indexed=len(edges))
+
+
+@app.get("/api/uploads/{upload_id}/call-graph", response_model=CallGraphResponse)
+def get_upload_call_graph(
+    upload_id: str,
+    function_name: str | None = None,
+    path: str | None = None,
+    store: UploadStore = Depends(get_store),
+) -> CallGraphResponse:
+    """Query callers and callees from the repository call graph."""
+    if store.get_upload(upload_id) is None:
+        raise HTTPException(404, "Upload not found.")
+    rows = store.query_call_graph(upload_id, function_name=function_name, path=path)
+    edges = [
+        CallGraphEdge(
+            caller_path=r[0],
+            caller_name=r[1],
+            caller_line=r[2],
+            callee_path=r[3],
+            callee_name=r[4],
+            call_line=r[5],
+        )
+        for r in rows
+    ]
+    return CallGraphResponse(upload_id=upload_id, edges=edges, total_edges=len(edges))
+
 
 
 

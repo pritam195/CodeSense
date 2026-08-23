@@ -70,3 +70,21 @@ class EvalReportResponse(BaseModel):
     queries: list[EvalQueryDetail]
     failures: list[EvalQueryDetail]
 
+class CallGraphEdge(BaseModel):
+    caller_path: str
+    caller_name: str
+    caller_line: int
+    callee_path: str | None
+    callee_name: str
+    call_line: int
+
+class CallGraphBuildResponse(BaseModel):
+    upload_id: str
+    edges_indexed: int
+
+class CallGraphResponse(BaseModel):
+    upload_id: str
+    edges: list[CallGraphEdge]
+    total_edges: int
+
+

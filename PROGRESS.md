@@ -43,5 +43,10 @@ Completed: `POST /api/uploads/{id}/hybrid-search` fuses BM25 keyword search (via
 
 Completed: Built an evaluation harness that measures Precision@k, Recall@k, MRR (Mean Reciprocal Rank), and latency (p50/p95) against a hand-labeled query set. Ships with a seed benchmark (`eval/queries.json`), a standalone CLI (`eval/harness.py`), and a `POST /api/uploads/{id}/evaluate` endpoint with structured reporting and failure analysis. 13/13 tests pass.
 
-Next: Phase 10 (Track C) can build a call graph across the repository using Tree-sitter AST symbols.
+## Phase 10 — Call Graph
+
+Completed: `POST /api/uploads/{id}/call-graph` statically extracts call expressions inside functions using Tree-sitter CST nodes for Python, TypeScript, and JavaScript, resolves caller-callee links across repository files, and persists directed edges in SQLite's `call_graph_edges` table. `GET /api/uploads/{id}/call-graph` queries direct callers and callees for any function. 15/15 tests pass.
+
+Next: Phase 11 can build a module-level dependency graph from imports/exports extracted across the repository.
+
 

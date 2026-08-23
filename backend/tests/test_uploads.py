@@ -270,4 +270,79 @@ def test_evaluate_endpoint_returns_report(tmp_path):
     assert data["failures"][0]["id"] == "q2"
 
 
+def test_callgraph_extracts_python_and_typescript_calls():
+    """Test Tree-sitter call extraction across Python and TypeScript files."""
+    from app.callgraph import build_call_graph
+
+    files = [
+        (
+            "src/auth.py",
+            "Python",
+            100,
+            "def hash_password(p):\n    return sha256(p)\n\ndef login(u, p):\n    h = hash_password(p)\n    return create_session(u)\n",
+        ),
+        (
+            "web/client.ts",
+            "TypeScript",
+            100,
+            "function apiCall() { return fetch(); }\nfunction onSubmit() {\n    apiCall();\n}\n",
+        ),
+    ]
+    symbols_by_path = {
+        "src/auth.py": [
+            ("function", "hash_password", 1, 2),
+            ("function", "login", 4, 6),
+        ],
+        "web/client.ts": [
+            ("function", "apiCall", 1, 1),
+            ("function", "onSubmit", 2, 4),
+        ],
+    }
+
+    edges = build_call_graph(files, symbols_by_path)
+    # login -> hash_password (internal resolved)
+    # login -> create_session (external/unresolved)
+    # onSubmit -> apiCall (internal resolved)
+    edge_tuples = [(e[0], e[1], e[3], e[4]) for e in edges]
+
+    assert ("src/auth.py", "login", "src/auth.py", "hash_password") in edge_tuples
+    assert ("src/auth.py", "login", None, "create_session") in edge_tuples
+    assert ("web/client.ts", "onSubmit", "web/client.ts", "apiCall") in edge_tuples
+
+
+def test_callgraph_api_endpoints_build_and_query(tmp_path):
+    """End-to-end: POST /call-graph builds edges and GET /call-graph filters by function."""
+    import io, zipfile
+
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr(
+            "src/service.py",
+            "def validate(x):\n    return x > 0\n\ndef process(data):\n    if validate(data):\n        save(data)\n",
+        )
+    client, store = client_for(tmp_path)
+    upload_id = client.post("/api/uploads", files={"file": ("repo.zip", archive.getvalue())}).json()["id"]
+    assert client.post(f"/api/uploads/{upload_id}/scan").status_code == 200
+    assert client.post(f"/api/uploads/{upload_id}/parse").status_code == 200
+
+    build_resp = client.post(f"/api/uploads/{upload_id}/call-graph")
+    assert build_resp.status_code == 200
+    assert build_resp.json()["edges_indexed"] >= 2
+
+    # Query all edges
+    all_resp = client.get(f"/api/uploads/{upload_id}/call-graph")
+    assert all_resp.status_code == 200
+    edges = all_resp.json()["edges"]
+    assert len(edges) >= 2
+
+    # Query by function name 'validate' (as callee)
+    callee_resp = client.get(f"/api/uploads/{upload_id}/call-graph?function_name=validate")
+    assert callee_resp.status_code == 200
+    matching = callee_resp.json()["edges"]
+    assert any(e["caller_name"] == "process" and e["callee_name"] == "validate" for e in matching)
+
+    app.dependency_overrides.clear()
+
+
+
 
