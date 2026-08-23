@@ -19,8 +19,24 @@ class UploadStore:
     def create_git_url(self,url): return self._insert(str(uuid.uuid4()),"git_url",url,url)
     def list_uploads(self):
         with self._connection() as c: return c.execute("SELECT id,source_type,original_name,created_at FROM uploads ORDER BY created_at DESC").fetchall()
+    def replace_with_archive(self, upload_id, content):
+        archive_path=self.archive_dir/f"{upload_id}.zip"; archive_path.write_bytes(content)
+        with self._connection() as c: c.execute("UPDATE uploads SET source_type=?, location=? WHERE id=?", ("zip", str(archive_path), upload_id))
     def get_upload(self,upload_id):
         with self._connection() as c: return c.execute("SELECT source_type,location FROM uploads WHERE id=?",(upload_id,)).fetchone()
+    def delete_upload(self, upload_id):
+        upload = self.get_upload(upload_id)
+        if upload is None: return False
+        source_type, location = upload
+        with self._connection() as c:
+            for table in ("file_metadata", "chunks", "code_symbols", "uploads"):
+                c.execute(f"DELETE FROM {table} WHERE upload_id=?" if table != "uploads" else "DELETE FROM uploads WHERE id=?", (upload_id,))
+        index_path = self.data_dir / "indices" / f"{upload_id}.faiss"
+        if index_path.is_file(): index_path.unlink()
+        if source_type == "zip":
+            archive_path = Path(location).resolve()
+            if archive_path.is_relative_to(self.archive_dir.resolve()) and archive_path.is_file(): archive_path.unlink()
+        return True
     def replace_file_metadata(self,upload_id,files):
         with self._connection() as c:
             c.execute("DELETE FROM file_metadata WHERE upload_id=?",(upload_id,)); c.executemany("INSERT INTO file_metadata VALUES (?,?,?,?,?)",[(upload_id,*item) for item in files])
@@ -40,6 +56,8 @@ class UploadStore:
         created_at=datetime.now(UTC)
         with self._connection() as c: c.execute("INSERT INTO uploads VALUES (?,?,?,?,?)",(upload_id,source_type,original_name,location,created_at.isoformat()))
         return StoredUpload(upload_id,source_type,original_name,created_at)
+
+
 
 
 

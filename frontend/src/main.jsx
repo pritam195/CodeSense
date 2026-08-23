@@ -1,56 +1,59 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+const api = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+const iconFor = path => path.endsWith('.py') ? '🐍' : path.endsWith('.ts') || path.endsWith('.tsx') ? 'TS' : path.endsWith('.js') || path.endsWith('.jsx') ? 'JS' : '•'
+const makeTree = files => { const root = {}; for (const file of files) { let node = root; const parts = file.path.split('/'); parts.forEach((part, index) => { if (index === parts.length - 1) node[part] = file; else node = node[part] ||= {}; }); } return root }
+function FileTree({ files, open, onOpen }) {
+  const [expanded, setExpanded] = useState(new Set())
+  const root = useMemo(() => makeTree(files), [files])
+  const render = (node, depth = 0, parent = '') => Object.entries(node).sort(([a, valueA], [b, valueB]) => (typeof valueA === 'object' && !valueA.path ? -1 : 1) - (typeof valueB === 'object' && !valueB.path ? -1 : 1) || a.localeCompare(b)).map(([name, value]) => {
+    const folder = typeof value === 'object' && !value.path
+    const key = `${parent}/${name}`
+    if (folder) { const isOpen = expanded.has(key); return <div key={key}><button style={{ paddingLeft: 8 + depth * 14 }} className="tree-folder" onClick={() => setExpanded(previous => { const next = new Set(previous); isOpen ? next.delete(key) : next.add(key); return next })}><span>{isOpen ? '⌄' : '›'}</span><span>⌕</span><span className="truncate">{name}</span></button>{isOpen && render(value, depth + 1, key)}</div> }
+    return <button key={value.path} style={{ paddingLeft: 26 + depth * 14 }} onClick={() => onOpen(value)} className={`file-item ${open?.path === value.path ? 'selected' : ''}`}><span className="file-icon">{iconFor(value.path)}</span><span className="truncate">{name}</span></button>
+  })
+  return <nav className="file-tree">{render(root)}</nav>
+}
 
 function App() {
-  const [mode, setMode] = useState('zip')
-  const [file, setFile] = useState(null)
-  const [url, setUrl] = useState('')
-  const [uploads, setUploads] = useState([])
-  const [selected, setSelected] = useState(null)
-  const [files, setFiles] = useState([])
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [uploads, setUploads] = useState([]), [repo, setRepo] = useState(), [screen, setScreen] = useState('library'), [files, setFiles] = useState([]), [open, setOpen] = useState()
+  const [question, setQuestion] = useState(''), [gitUrl, setGitUrl] = useState(''), [answer, setAnswer] = useState(), [busy, setBusy] = useState(false), [error, setError] = useState(''), [zip, setZip] = useState()
+  const call = async (path, options) => { const response = await fetch(api + path, options); const payload = response.status === 204 ? null : await response.json(); if (!response.ok) throw Error(payload?.detail || 'Request failed.'); return payload }
+  useEffect(() => { call('/api/uploads').then(payload => setUploads(payload.uploads)).catch(error => setError(error.message)) }, [])
+  const lines = useMemo(() => open?.content?.split('\n') ?? [], [open])
 
-  async function loadUploads() {
-    const response = await fetch(`${apiBase}/api/uploads`)
-    const payload = await response.json()
-    if (!response.ok) throw new Error(payload.detail ?? 'Could not load repositories.')
-    setUploads(payload.uploads)
-  }
-  useEffect(() => { loadUploads().catch(err => setError(err.message)) }, [])
+  async function choose(item) { setRepo(item); setScreen('workspace'); setOpen(); setAnswer(); setError(''); try { const payload = await call(`/api/uploads/${item.id}/files`); setFiles(payload.files); if (payload.files[0]) setOpen(payload.files[0]); setError('') } catch { setFiles([]) } }
+  async function upload(event) { event.preventDefault(); if (!zip) return; setBusy(true); try { const body = new FormData(); body.append('file', zip); const saved = await call('/api/uploads', { method: 'POST', body }); setUploads((await call('/api/uploads')).uploads); choose(saved) } catch (error) { setError(error.message) } finally { setBusy(false) } }
+  async function saveGit(event) { event.preventDefault(); if (!gitUrl.trim()) return; setBusy(true); setError(''); try { const saved = await call('/api/uploads/git', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: gitUrl.trim() }) }); setUploads((await call('/api/uploads')).uploads); setGitUrl(''); await choose(saved); setError('') } catch (error) { setError(error.message) } finally { setBusy(false) } }
+  async function removeRepo(item) { if (!item || !confirm(`Remove ${item.original_name}? This also removes its local index.`)) return; setBusy(true); try { await call(`/api/uploads/${item.id}`, { method: 'DELETE' }); setUploads(items => items.filter(entry => entry.id !== item.id)); if (repo?.id === item.id) { setRepo(); setFiles([]); setOpen(); setAnswer(); setScreen('library') } } catch (error) { setError(error.message) } finally { setBusy(false) } }
+  async function prepare() { setBusy(true); setError(''); try { let current = repo; if (current.source_type === 'git_url') { await call(`/api/uploads/${current.id}/fetch`, { method: 'POST' }); current = { ...current, source_type: 'zip' }; setRepo(current); setUploads(items => items.map(item => item.id === current.id ? current : item)) } for (const step of ['scan', 'parse', 'chunk', 'embed']) await call(`/api/uploads/${current.id}/${step}`, { method: 'POST' }); const indexed = await call(`/api/uploads/${current.id}/files`); setFiles(indexed.files); if (indexed.files[0]) setOpen(indexed.files[0]); setError('') } catch (error) { setError(error.message) } finally { setBusy(false) } }
+  async function ask(event) { event.preventDefault(); if (!question.trim()) return; setBusy(true); setError(''); try { setAnswer(await call(`/api/uploads/${repo.id}/answer`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, limit: 5 }) })) } catch (error) { setError(error.message) } finally { setBusy(false) } }
 
-  async function submit(event) {
-    event.preventDefault(); setError(''); setLoading(true)
-    try {
-      let response
-      if (mode === 'zip') {
-        if (!file) throw new Error('Choose a .zip archive first.')
-        const body = new FormData(); body.append('file', file)
-        response = await fetch(`${apiBase}/api/uploads`, { method: 'POST', body })
-      } else {
-        response = await fetch(`${apiBase}/api/uploads/git`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) })
-      }
-      const payload = await response.json()
-      if (!response.ok) throw new Error(payload.detail ?? 'Upload failed.')
-      setSelected(payload); setFiles([]); await loadUploads()
-    } catch (err) { setError(err.message) } finally { setLoading(false) }
-  }
-
-  async function scan(upload) {
-    setError(''); setLoading(true); setSelected(upload)
-    try {
-      const response = await fetch(`${apiBase}/api/uploads/${upload.id}/scan`, { method: 'POST' })
-      const payload = await response.json()
-      if (!response.ok) throw new Error(payload.detail ?? 'Scan failed.')
-      const filesResponse = await fetch(`${apiBase}/api/uploads/${upload.id}/files`)
-      const filePayload = await filesResponse.json()
-      setFiles(filePayload.files)
-    } catch (err) { setError(err.message) } finally { setLoading(false) }
-  }
-
-  return <main className="min-h-screen bg-slate-950 p-6 text-slate-100"><div className="mx-auto grid max-w-6xl gap-6 lg:grid-cols-[380px_1fr]"><section className="rounded-2xl bg-slate-900 p-7 shadow-2xl"><p className="text-sm font-semibold text-cyan-400">CodeSense</p><h1 className="mt-2 text-3xl font-bold">Repositories</h1><p className="mt-3 text-slate-400">Saved repositories appear in the library. ZIP files can be scanned without executing code.</p><form className="mt-6 space-y-4" onSubmit={submit}><div className="flex gap-2"><button type="button" onClick={() => setMode('zip')} className={mode === 'zip' ? 'tab active' : 'tab'}>ZIP archive</button><button type="button" onClick={() => setMode('git')} className={mode === 'git' ? 'tab active' : 'tab'}>Git URL</button></div>{mode === 'zip' ? <input className="field" type="file" accept=".zip,application/zip" onChange={e => setFile(e.target.files?.[0] ?? null)} /> : <input className="field" type="url" placeholder="https://github.com/org/repo.git" value={url} onChange={e => setUrl(e.target.value)} required />}<button className="w-full rounded-lg bg-cyan-400 px-4 py-3 font-semibold text-slate-950 disabled:opacity-50" disabled={loading}>{loading ? 'Working…' : 'Save repository'}</button></form>{error && <p className="mt-4 rounded-lg bg-red-950 p-3 text-sm text-red-200">{error}</p>}<div className="mt-7 space-y-2"><h2 className="font-semibold">Saved repositories</h2>{uploads.length === 0 && <p className="text-sm text-slate-500">None saved yet.</p>}{uploads.map(upload => <button key={upload.id} onClick={() => { setSelected(upload); setFiles([]) }} className="w-full rounded-lg bg-slate-800 p-3 text-left hover:bg-slate-700"><span className="block truncate font-medium">{upload.original_name}</span><span className="text-xs text-slate-400">{upload.source_type === 'zip' ? 'ZIP archive' : 'Git URL'}</span></button>)}</div></section><section className="rounded-2xl bg-slate-900 p-7 shadow-2xl"><h2 className="text-2xl font-bold">{selected ? selected.original_name : 'Select a repository'}</h2>{selected ? <><p className="mt-2 text-sm text-slate-400">Upload ID: <code>{selected.id}</code></p>{selected.source_type === 'zip' && <button onClick={() => scan(selected)} disabled={loading} className="mt-5 rounded-lg bg-emerald-300 px-4 py-2 font-semibold text-emerald-950">{loading ? 'Scanning…' : 'Scan and show files'}</button>}{selected.source_type === 'git_url' && <p className="mt-5 text-slate-400">Git URLs are saved but not fetched yet.</p>}{files.length > 0 && <div className="mt-6"><h3 className="font-semibold">Indexed files ({files.length})</h3><div className="mt-3 max-h-[520px] overflow-auto rounded-lg border border-slate-700">{files.map(item => <div key={item.path} className="border-b border-slate-800 px-4 py-3 last:border-0"><p className="font-mono text-sm text-cyan-300">{item.path}</p><p className="text-xs text-slate-400">{item.language} · {item.size_bytes} bytes</p></div>)}</div></div>}</> : <p className="mt-4 text-slate-400">Choose a saved repository to view its details and scan its source files.</p>}</section></div></main>
+  if (screen === 'library') return <main className="library-page"><header className="library-header"><span className="brand-mark">◈</span><strong>CodeSense</strong><span className="topbar-separator"/><span className="muted">Repository intelligence</span></header><section className="library-content"><div className="library-intro"><p className="eyebrow">YOUR WORKSPACE</p><h1>Choose a repository to explore</h1><p>Upload a ZIP or import a public GitHub repository. Select one to browse its source and ask grounded questions.</p></div><div className="import-grid"><form onSubmit={upload} className="import-card"><span className="import-icon">↑</span><h2>Upload a ZIP</h2><p>Index a local project archive.</p><input id="zip-input" type="file" accept=".zip" onChange={event => setZip(event.target.files?.[0])}/><button disabled={!zip || busy}>{busy ? 'Uploading…' : 'Choose ZIP file'}</button></form><form onSubmit={saveGit} className="import-card"><span className="import-icon">⌘</span><h2>Import from GitHub</h2><p>Public repositories only; no clone or execution.</p><input value={gitUrl} onChange={event => setGitUrl(event.target.value)} placeholder="https://github.com/owner/repo" type="url" required/><button disabled={!gitUrl.trim() || busy}>{busy ? 'Saving…' : 'Add GitHub repository'}</button></form></div>{error && <div className="library-error">{error}</div>}<div className="library-list-heading"><div><p className="eyebrow">SAVED REPOSITORIES</p><h2>Your library</h2></div><span>{uploads.length} repositories</span></div><div className="repository-grid">{uploads.length === 0 ? <p className="empty">Your uploaded repositories will appear here.</p> : uploads.map(item => <article key={item.id} className="repository-card"><div className="repo-card-icon">{item.source_type === 'git_url' ? '⌘' : '▣'}</div><div><h3>{item.original_name}</h3><p>{item.source_type === 'git_url' ? 'GitHub repository' : 'ZIP archive'}</p></div><div className="repository-actions"><button onClick={() => choose(item)}>Open workspace <span>→</span></button><button className="library-remove" onClick={() => removeRepo(item)} disabled={busy}>Remove</button></div></article>)}</div></section></main>
+  return <main className="workspace">
+    <header className="topbar"><span className="brand-mark">◈</span><strong>CodeSense</strong><span className="topbar-separator"/><span className="muted">Repository intelligence</span>{repo && <span className="repo-chip">{repo.original_name}</span>}</header>
+    <div className="shell">
+      <aside className="explorer"><div className="pane-heading"><span>EXPLORER</span><button title="Back to repository library" onClick={() => setScreen('library')}>←</button></div>
+        
+        {repo && <><div className="workspace-repo-name"><span>⌕</span><strong className="truncate">{repo.original_name}</strong></div>{files.length === 0 && <button className="prepare workspace-prepare" onClick={prepare} disabled={busy}>{busy ? 'Working…' : repo.source_type === 'git_url' ? 'Fetch & prepare' : 'Prepare repository'}</button>}<p className="section-label">FILES</p>{files.length === 0 ? <p className="empty tree-empty">Prepare this repository to browse files.</p> : <FileTree files={files} open={open} onOpen={setOpen} />}</>}
+      </aside>
+      <section className="editor"><div className="tabbar">{open ? <div className="editor-tab"><span>{iconFor(open.path)}</span><span>{open.path.split('/').at(-1)}</span><button onClick={() => setOpen()}>×</button></div> : <span className="editor-hint">Open a file from the explorer</span>}</div>
+        {open ? <><div className="breadcrumb">{open.path.split('/').join('  /  ')}</div><div className="code-area">{lines.map((line, index) => <div className="code-line" key={index}><span className="line-number">{index + 1}</span><code>{line || ' '}</code></div>)}</div></> : <div className="empty-editor"><span>CodeSense</span><p>Select and prepare a repository, then open a file.</p></div>}
+      </section>
+      <aside className="chat"><div className="chat-header"><div><p className="eyebrow">REPOSITORY CHAT</p><h1>Ask CodeSense</h1></div><span className="status-dot" title="Grounded answers"/></div>
+        <div className="chat-scroll">{error && <div className="error">{error}</div>}{!answer && <div className="chat-empty"><div className="spark">✦</div><h2>Understand this codebase</h2><p>Ask about architecture, flows, or implementation details. Answers cite the exact repository lines used.</p></div>}{answer && <article className="answer"><p className="answer-label">GROUNDED ANSWER</p><p className="answer-text">{answer.answer}</p><div className="citation-title">Sources</div>{answer.citations.map(citation => <button key={citation.path + citation.start_line} onClick={() => setOpen(files.find(file => file.path === citation.path))} className="citation"><span>↗</span>{citation.path}<small>Lines {citation.start_line}–{citation.end_line}</small></button>)}</article>}</div>
+        <form onSubmit={ask} className="composer"><textarea value={question} onChange={event => setQuestion(event.target.value)} placeholder={repo ? 'Ask about this repository…' : 'Select a repository first'} disabled={!repo || busy} rows="3"/><div><span>{repo ? 'Answers include citations' : 'No repository selected'}</span><button disabled={!repo || busy || !question.trim()}>{busy ? 'Thinking…' : 'Send ↵'}</button></div></form>
+      </aside>
+    </div>
+  </main>
 }
 createRoot(document.getElementById('root')).render(<App />)
+
+
+
+
+
+
+

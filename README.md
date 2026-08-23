@@ -24,6 +24,11 @@ Run backend tests with `cd backend && pytest`.
 
 - Uploads are limited to 50 MiB and only `.zip` archives are accepted.
 - Uploaded archives are stored as opaque files and are never extracted or run.
-- Git repository URLs must use `https` or `git`; they are recorded only and are
-  never fetched or cloned in this phase.
+- Public `https://github.com/owner/repository` URLs are fetched only as bounded ZIP archives; CodeSense never invokes `git` or runs repository code.
+
+
+## Grounded answers
+
+Set `OPENAI_API_KEY` for the backend to enable answers. CodeSense sends only the question and the top retrieved source chunks to the OpenAI Responses API; model citations are validated against those chunks before they are returned.
+
 

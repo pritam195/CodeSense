@@ -21,3 +21,17 @@ Next: Phase 5 can embed each persisted chunk and map vector IDs back to this chu
 Completed: `POST /api/uploads/{id}/embed` generates normalized document embeddings through the single rate-limited `EmbeddingClient` wrapper and persists a FAISS `IndexFlatIP` index per repository. Chunk ordering in SQLite supplies the vector-ID-to-chunk/file/line mapping. `POST /api/uploads/{id}/similarity-search` provides a raw vector query for verification. The configured model is `sentence-transformers/all-MiniLM-L6-v2`, with a 256-token model cap and a 12,000-character input guard.
 
 Next: Phase 6 can present semantic search results in the frontend using the existing raw similarity endpoint.
+
+## Phase 6 — Semantic Search
+
+Completed: the frontend now presents saved repositories and indexed files on the left, displays an opened file's source on the right, and offers an "Ask about this repository" input. Preparing a ZIP runs scan → parse → chunk → embed; search calls the FAISS-backed similarity endpoint and presents cited file/line chunks. ZIP upload remains available in the repository panel.
+
+## Phase 7 — Grounded Answers
+
+Completed: `POST /api/uploads/{id}/answer` retrieves the relevant FAISS chunks, sends only those excerpts to the configured OpenAI Responses model, and rejects output with missing or invalid citations. The frontend renders the answer with file/line citation links. Set `OPENAI_API_KEY` on the backend to enable answers.
+
+
+## GitHub archive import
+
+Completed: public https://github.com/owner/repository URLs are fetched only as bounded default-branch ZIP archives before the existing scan → parse → chunk → embed workflow. CodeSense never clones or executes a repository.
+

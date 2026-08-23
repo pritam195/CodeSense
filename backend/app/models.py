@@ -21,3 +21,12 @@ class EmbeddingResponse(BaseModel): upload_id: str; vectors_indexed: int
 class SimilarityRequest(BaseModel): query: str; limit: int = 5
 class SimilarityResult(BaseModel): path: str; start_line: int; end_line: int; content: str; score: float
 class SimilarityResponse(BaseModel): upload_id: str; results: list[SimilarityResult]
+
+class GitFetchResponse(BaseModel):
+    upload_id: str
+    source_type: Literal['zip']
+
+
+class AnswerRequest(BaseModel): question: str; limit: int = 5
+class Citation(BaseModel): path: str; start_line: int; end_line: int
+class AnswerResponse(BaseModel): upload_id: str; answer: str; citations: list[Citation]

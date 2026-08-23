@@ -1,22 +1,28 @@
 from pathlib import Path
 from urllib.parse import urlparse
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
+from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from .config import Settings
-from .models import ChunkListResponse, ChunkResponse, CodeChunk, CodeSymbol, EmbeddingResponse, FileListResponse, FileMetadata, GitUploadRequest, ParseResponse, ScanResponse, SimilarityRequest, SimilarityResponse, SimilarityResult, SymbolListResponse, UploadListResponse, UploadResponse
+from .answer import AnswerClient, AnswerError
+from .models import AnswerRequest, AnswerResponse, Citation, ChunkListResponse, ChunkResponse, CodeChunk, CodeSymbol, EmbeddingResponse, FileListResponse, FileMetadata, GitFetchResponse, GitUploadRequest, ParseResponse, ScanResponse, SimilarityRequest, SimilarityResponse, SimilarityResult, SymbolListResponse, UploadListResponse, UploadResponse
 from .chunker import SourceSymbol, chunk_file
 from .embed import EmbeddingClient, FaissIndexStore
+from .gitfetch import GitFetchError, download_archive
 from .parser import extract_symbols
 from .scanner import ScanError, scan_archive
 from .storage import UploadStore
 
 settings = Settings()
 embedding_client = EmbeddingClient(settings.embedding_model, settings.embedding_max_chars, settings.embedding_min_interval_seconds)
+answer_client = AnswerClient(settings.openai_api_key, settings.answer_model)
 app = FastAPI(title="CodeSense API", version="0.3.0")
-app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$", allow_methods=["*"], allow_headers=["*"])
 
 def get_embedding_client() -> EmbeddingClient:
     return embedding_client
+
+def get_answer_client() -> AnswerClient:
+    return answer_client
 
 def get_store() -> UploadStore:
     return UploadStore(settings.data_dir)
@@ -42,15 +48,19 @@ async def upload_archive(file: UploadFile = File(...), store: UploadStore = Depe
 @app.post("/api/uploads/git", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
 def upload_git_url(request: GitUploadRequest, store: UploadStore = Depends(get_store)) -> UploadResponse:
     parsed = urlparse(request.url)
-    if parsed.scheme not in {"https", "git"} or not parsed.netloc: raise HTTPException(400, "Use an absolute HTTPS or Git repository URL.")
+    if parsed.scheme != "https" or parsed.netloc.lower() != "github.com": raise HTTPException(400, "Use a public https://github.com/owner/repository URL.")
     return to_response(store.create_git_url(request.url))
 
+@app.delete("/api/uploads/{upload_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_upload(upload_id: str, store: UploadStore = Depends(get_store)) -> Response:
+    if not store.delete_upload(upload_id): raise HTTPException(404, "Upload not found.")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 @app.post("/api/uploads/{upload_id}/scan", response_model=ScanResponse)
 def scan_upload(upload_id: str, store: UploadStore = Depends(get_store)) -> ScanResponse:
     upload = store.get_upload(upload_id)
     if upload is None: raise HTTPException(404, "Upload not found.")
     source_type, location = upload
-    if source_type != "zip": raise HTTPException(409, "Git URLs are stored but cannot be scanned until a safe fetch workflow is added.")
+    if source_type != "zip": raise HTTPException(409, "Fetch the public GitHub archive before scanning.")
     try: files = scan_archive(location, settings)
     except ScanError as error: raise HTTPException(400, str(error)) from error
     store.replace_file_metadata(upload_id, files)
@@ -109,3 +119,30 @@ def raw_similarity_search(upload_id: str, request: SimilarityRequest, store: Upl
     try: matches = FaissIndexStore(settings.data_dir).search(upload_id, client.encode_query(request.query), request.limit)
     except RuntimeError as error: raise HTTPException(409, "Create embeddings before searching.") from error
     return SimilarityResponse(upload_id=upload_id, results=[SimilarityResult(path=chunks[index][0], start_line=chunks[index][1], end_line=chunks[index][2], content=chunks[index][3], score=score) for index, score in matches])
+
+@app.post("/api/uploads/{upload_id}/fetch", response_model=GitFetchResponse)
+def fetch_github_upload(upload_id: str, store: UploadStore = Depends(get_store)) -> GitFetchResponse:
+    upload = store.get_upload(upload_id)
+    if upload is None: raise HTTPException(404, "Upload not found.")
+    source_type, location = upload
+    if source_type != "git_url": raise HTTPException(409, "This repository is already an archive.")
+    try: content = download_archive(location, settings.max_upload_bytes)
+    except GitFetchError as error: raise HTTPException(400, str(error)) from error
+    store.replace_with_archive(upload_id, content)
+    return GitFetchResponse(upload_id=upload_id, source_type="zip")
+
+@app.post("/api/uploads/{upload_id}/answer", response_model=AnswerResponse)
+def answer_repository(upload_id: str, request: AnswerRequest, store: UploadStore = Depends(get_store), embeddings: EmbeddingClient = Depends(get_embedding_client), client: AnswerClient = Depends(get_answer_client)) -> AnswerResponse:
+    chunks = store.list_chunks(upload_id)
+    if not chunks: raise HTTPException(409, "Create chunks before answering.")
+    try: matches = FaissIndexStore(settings.data_dir).search(upload_id, embeddings.encode_query(request.question), min(request.limit, settings.answer_context_limit))
+    except RuntimeError as error: raise HTTPException(409, "Create embeddings before answering.") from error
+    contexts = [{"id": position + 1, "path": chunks[index][0], "start_line": chunks[index][1], "end_line": chunks[index][2], "content": chunks[index][3]} for position, (index, _) in enumerate(matches)]
+    if not contexts: raise HTTPException(404, "No relevant source chunks were found.")
+    try: answer, citation_ids = client.answer(request.question, contexts)
+    except AnswerError as error: raise HTTPException(503, str(error)) from error
+    by_id = {context["id"]: context for context in contexts}
+    return AnswerResponse(upload_id=upload_id, answer=answer, citations=[Citation(path=by_id[item]["path"], start_line=by_id[item]["start_line"], end_line=by_id[item]["end_line"]) for item in citation_ids])
+
+
+

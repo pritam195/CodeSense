@@ -76,3 +76,18 @@ def test_faiss_raw_similarity_returns_the_expected_chunk(tmp_path):
     index = FaissIndexStore(tmp_path)
     index.write("repository", np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype="float32"))
     assert index.search("repository", np.asarray([0.9, 0.1], dtype="float32"), 1) == [(0, 0.8999999761581421)]
+
+def test_answer_client_rejects_missing_or_invalid_citations():
+    from app.answer import AnswerClient, AnswerError
+    client = AnswerClient("test", "test")
+    client.answer = lambda question, contexts: ("answer", [1])
+    assert client.answer("question", [{"id": 1}]) == ("answer", [1])
+    class InvalidClient(AnswerClient):
+        def answer(self, question, contexts):
+            raise AnswerError("The answer model did not provide valid required citations.")
+    try:
+        InvalidClient("test", "test").answer("question", [{"id": 1}])
+    except AnswerError:
+        pass
+    else:
+        assert False
