@@ -15,6 +15,7 @@ class UploadStore:
             c.execute("CREATE TABLE IF NOT EXISTS chunks (upload_id TEXT NOT NULL, path TEXT NOT NULL, start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, content TEXT NOT NULL, symbol_name TEXT, PRIMARY KEY (upload_id,path,start_line,end_line))")
             c.execute("CREATE TABLE IF NOT EXISTS code_symbols (upload_id TEXT NOT NULL, path TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, PRIMARY KEY (upload_id,path,kind,name,start_line))")
             c.execute("CREATE TABLE IF NOT EXISTS call_graph_edges (upload_id TEXT NOT NULL, caller_path TEXT NOT NULL, caller_name TEXT NOT NULL, caller_line INTEGER NOT NULL, callee_path TEXT, callee_name TEXT NOT NULL, call_line INTEGER NOT NULL, PRIMARY KEY (upload_id,caller_path,caller_name,callee_name,call_line))")
+            c.execute("CREATE TABLE IF NOT EXISTS dependency_graph_edges (upload_id TEXT NOT NULL, source_path TEXT NOT NULL, target_path TEXT, import_specifier TEXT NOT NULL, is_external BOOLEAN NOT NULL, line_number INTEGER NOT NULL, PRIMARY KEY (upload_id,source_path,import_specifier,line_number))")
     def create_archive(self, original_name, content):
         upload_id=str(uuid.uuid4()); archive_path=self.archive_dir/f"{upload_id}.zip"; archive_path.write_bytes(content); return self._insert(upload_id,"zip",original_name,str(archive_path))
     def create_git_url(self,url): return self._insert(str(uuid.uuid4()),"git_url",url,url)
@@ -30,7 +31,7 @@ class UploadStore:
         if upload is None: return False
         source_type, location = upload
         with self._connection() as c:
-            for table in ("file_metadata", "chunks", "code_symbols", "call_graph_edges", "uploads"):
+            for table in ("file_metadata", "chunks", "code_symbols", "call_graph_edges", "dependency_graph_edges", "uploads"):
                 c.execute(f"DELETE FROM {table} WHERE upload_id=?" if table != "uploads" else "DELETE FROM uploads WHERE id=?", (upload_id,))
         index_path = self.data_dir / "indices" / f"{upload_id}.faiss"
         if index_path.is_file(): index_path.unlink()
@@ -70,9 +71,23 @@ class UploadStore:
         query += " ORDER BY caller_path, caller_line"
         with self._connection() as c:
             return c.execute(query, params).fetchall()
+    def replace_dependency_graph(self, upload_id, edges):
+        with self._connection() as c:
+            c.execute("DELETE FROM dependency_graph_edges WHERE upload_id=?", (upload_id,))
+            c.executemany("INSERT OR REPLACE INTO dependency_graph_edges VALUES (?,?,?,?,?,?)", [(upload_id, *item) for item in edges])
+    def query_dependency_graph(self, upload_id, path=None):
+        query = "SELECT source_path, target_path, import_specifier, is_external, line_number FROM dependency_graph_edges WHERE upload_id=?"
+        params = [upload_id]
+        if path:
+            query += " AND (source_path=? OR target_path=?)"
+            params.extend([path, path])
+        query += " ORDER BY source_path, line_number"
+        with self._connection() as c:
+            return c.execute(query, params).fetchall()
     def _insert(self,upload_id,source_type,original_name,location):
         created_at=datetime.now(UTC)
         with self._connection() as c: c.execute("INSERT INTO uploads VALUES (?,?,?,?,?)",(upload_id,source_type,original_name,location,created_at.isoformat()))
         return StoredUpload(upload_id,source_type,original_name,created_at)
+
 
 

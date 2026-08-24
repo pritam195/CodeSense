@@ -6,8 +6,9 @@ from .config import Settings
 from .answer import AnswerClient, AnswerError
 from .bm25 import BM25Retriever, reciprocal_rank_fusion
 from .callgraph import build_call_graph
+from .depgraph import build_dependency_graph
 from .eval_api import load_default_queries, run_internal_evaluation
-from .models import AnswerRequest, AnswerResponse, CallGraphBuildResponse, CallGraphEdge, CallGraphResponse, Citation, ChunkListResponse, ChunkResponse, CodeChunk, CodeSymbol, EmbeddingResponse, EvalReportResponse, EvalRequest, FileListResponse, FileMetadata, GitFetchResponse, GitUploadRequest, HybridSearchRequest, HybridSearchResponse, HybridSearchResult, ParseResponse, ScanResponse, SimilarityRequest, SimilarityResponse, SimilarityResult, SymbolListResponse, UploadListResponse, UploadResponse
+from .models import AnswerRequest, AnswerResponse, CallGraphBuildResponse, CallGraphEdge, CallGraphResponse, Citation, ChunkListResponse, ChunkResponse, CodeChunk, CodeSymbol, DependencyEdge, DependencyGraphBuildResponse, DependencyGraphResponse, EmbeddingResponse, EvalReportResponse, EvalRequest, FileListResponse, FileMetadata, GitFetchResponse, GitUploadRequest, HybridSearchRequest, HybridSearchResponse, HybridSearchResult, ParseResponse, ScanResponse, SimilarityRequest, SimilarityResponse, SimilarityResult, SymbolListResponse, UploadListResponse, UploadResponse
 from .chunker import SourceSymbol, chunk_file
 from .embed import EmbeddingClient, FaissIndexStore
 from .gitfetch import GitFetchError, download_archive
@@ -234,6 +235,41 @@ def get_upload_call_graph(
         for r in rows
     ]
     return CallGraphResponse(upload_id=upload_id, edges=edges, total_edges=len(edges))
+
+
+@app.post("/api/uploads/{upload_id}/dependency-graph", response_model=DependencyGraphBuildResponse)
+def build_upload_dependency_graph(upload_id: str, store: UploadStore = Depends(get_store)) -> DependencyGraphBuildResponse:
+    """Extract and build repository module dependency graph."""
+    if store.get_upload(upload_id) is None:
+        raise HTTPException(404, "Upload not found.")
+    files = store.list_file_metadata(upload_id)
+    edges = build_dependency_graph(files)
+    store.replace_dependency_graph(upload_id, edges)
+    return DependencyGraphBuildResponse(upload_id=upload_id, edges_indexed=len(edges))
+
+
+@app.get("/api/uploads/{upload_id}/dependency-graph", response_model=DependencyGraphResponse)
+def get_upload_dependency_graph(
+    upload_id: str,
+    path: str | None = None,
+    store: UploadStore = Depends(get_store),
+) -> DependencyGraphResponse:
+    """Query module dependencies and dependents."""
+    if store.get_upload(upload_id) is None:
+        raise HTTPException(404, "Upload not found.")
+    rows = store.query_dependency_graph(upload_id, path=path)
+    edges = [
+        DependencyEdge(
+            source_path=r[0],
+            target_path=r[1],
+            import_specifier=r[2],
+            is_external=bool(r[3]),
+            line_number=r[4],
+        )
+        for r in rows
+    ]
+    return DependencyGraphResponse(upload_id=upload_id, edges=edges, total_edges=len(edges))
+
 
 
 

@@ -344,5 +344,69 @@ def test_callgraph_api_endpoints_build_and_query(tmp_path):
     app.dependency_overrides.clear()
 
 
+def test_depgraph_extracts_and_resolves_imports():
+    """Test module import extraction and resolution for Python and TypeScript."""
+    from app.depgraph import build_dependency_graph
+
+    files = [
+        ("src/config.py", "Python", 50, "DB_URL = 'sqlite:///'\n"),
+        ("src/main.py", "Python", 100, "import os\nfrom .config import DB_URL\nfrom .models import User\n"),
+        ("web/router.ts", "TypeScript", 50, "export const router = {};\n"),
+        ("web/app.ts", "TypeScript", 100, "import React from 'react';\nimport { router } from './router';\n"),
+    ]
+
+    edges = build_dependency_graph(files)
+    # main.py -> os (external)
+    # main.py -> src/config.py (internal relative)
+    # app.ts -> react (external)
+    # app.ts -> web/router.ts (internal relative)
+    edge_map = {(e[0], e[2]): (e[1], e[3]) for e in edges}
+
+    assert ("src/main.py", "os") in edge_map
+    assert edge_map[("src/main.py", "os")] == (None, True)
+
+    assert ("src/main.py", ".config") in edge_map
+    assert edge_map[("src/main.py", ".config")] == ("src/config.py", False)
+
+    assert ("web/app.ts", "react") in edge_map
+    assert edge_map[("web/app.ts", "react")] == (None, True)
+
+    assert ("web/app.ts", "./router") in edge_map
+    assert edge_map[("web/app.ts", "./router")] == ("web/router.ts", False)
+
+
+def test_depgraph_api_endpoints_build_and_query(tmp_path):
+    """End-to-end: POST /dependency-graph builds edges and GET /dependency-graph queries edges."""
+    import io, zipfile
+
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("src/db.py", "def connect(): return None\n")
+        zf.writestr("src/app.py", "from .db import connect\nimport json\n")
+
+    client, store = client_for(tmp_path)
+    upload_id = client.post("/api/uploads", files={"file": ("repo.zip", archive.getvalue())}).json()["id"]
+    assert client.post(f"/api/uploads/{upload_id}/scan").status_code == 200
+
+    build_resp = client.post(f"/api/uploads/{upload_id}/dependency-graph")
+    assert build_resp.status_code == 200
+    assert build_resp.json()["edges_indexed"] >= 2
+
+    # Query all edges
+    all_resp = client.get(f"/api/uploads/{upload_id}/dependency-graph")
+    assert all_resp.status_code == 200
+    assert all_resp.json()["total_edges"] >= 2
+
+    # Query by path src/app.py
+    app_resp = client.get(f"/api/uploads/{upload_id}/dependency-graph?path=src/app.py")
+    assert app_resp.status_code == 200
+    edges = app_resp.json()["edges"]
+    assert any(e["source_path"] == "src/app.py" and e["target_path"] == "src/db.py" for e in edges)
+    assert any(e["source_path"] == "src/app.py" and e["is_external"] is True for e in edges)
+
+    app.dependency_overrides.clear()
+
+
+
 
 

@@ -87,4 +87,21 @@ class CallGraphResponse(BaseModel):
     edges: list[CallGraphEdge]
     total_edges: int
 
+class DependencyEdge(BaseModel):
+    source_path: str
+    target_path: str | None
+    import_specifier: str
+    is_external: bool
+    line_number: int
+
+class DependencyGraphBuildResponse(BaseModel):
+    upload_id: str
+    edges_indexed: int
+
+class DependencyGraphResponse(BaseModel):
+    upload_id: str
+    edges: list[DependencyEdge]
+    total_edges: int
+
+
 

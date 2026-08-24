@@ -47,6 +47,11 @@ Completed: Built an evaluation harness that measures Precision@k, Recall@k, MRR 
 
 Completed: `POST /api/uploads/{id}/call-graph` statically extracts call expressions inside functions using Tree-sitter CST nodes for Python, TypeScript, and JavaScript, resolves caller-callee links across repository files, and persists directed edges in SQLite's `call_graph_edges` table. `GET /api/uploads/{id}/call-graph` queries direct callers and callees for any function. 15/15 tests pass.
 
-Next: Phase 11 can build a module-level dependency graph from imports/exports extracted across the repository.
+## Phase 11 — Dependency Graph
+
+Completed: `POST /api/uploads/{id}/dependency-graph` extracts import and export statements using Tree-sitter CST nodes for Python, TypeScript, and JavaScript, resolves relative (`./router`, `.config`) and package-absolute (`app.models`) import specifiers against the repository file index, distinguishes internal from third-party/stdlib dependencies, and persists edges in SQLite's `dependency_graph_edges` table. `GET /api/uploads/{id}/dependency-graph` queries imported dependencies and upstream dependents for any module. 17/17 tests pass.
+
+Next: Phase 12 can migrate both call graph and dependency graph models into Neo4j for multi-hop graph traversal queries.
+
 
 
