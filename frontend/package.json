@@ -14,6 +14,11 @@
     "mermaid": "^11.17.2",
     "react": "latest",
     "react-dom": "latest",
+    "react-icons": "^5.7.0",
+    "react-markdown": "^10.1.0",
+    "react-syntax-highlighter": "^16.1.1",
+    "react-textarea-autosize": "^8.5.9",
+    "remark-gfm": "^4.0.1",
     "tailwindcss": "latest",
     "vite": "latest"
   }
