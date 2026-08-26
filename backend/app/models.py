@@ -103,5 +103,21 @@ class DependencyGraphResponse(BaseModel):
     edges: list[DependencyEdge]
     total_edges: int
 
+class GraphTraversalNode(BaseModel):
+    name: str | None = None
+    path: str
+    is_external: bool | None = None
+
+class GraphTraversalRelationship(BaseModel):
+    line: int
+    specifier: str | None = None
+
+class GraphTraversalPath(BaseModel):
+    nodes: list[GraphTraversalNode]
+    relationships: list[GraphTraversalRelationship]
+
+class GraphTraversalResponse(BaseModel):
+    upload_id: str
+    paths: list[GraphTraversalPath]
 
 

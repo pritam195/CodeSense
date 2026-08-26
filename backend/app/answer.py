@@ -42,6 +42,7 @@ class AnswerClient:
             payload = json.loads(response.choices[0].message.content)
             answer, citation_ids = payload["answer"].strip(), payload["citation_ids"]
         except Exception as error:
+            print("ANSWER ERROR:", repr(error))
             raise AnswerError("Repository answer generation failed.") from error
         valid_ids = {item["id"] for item in contexts}
         if not answer or not isinstance(citation_ids, list) or not citation_ids or any(not isinstance(item, int) or item not in valid_ids for item in citation_ids):

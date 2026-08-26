@@ -51,7 +51,6 @@ Completed: `POST /api/uploads/{id}/call-graph` statically extracts call expressi
 
 Completed: `POST /api/uploads/{id}/dependency-graph` extracts import and export statements using Tree-sitter CST nodes for Python, TypeScript, and JavaScript, resolves relative (`./router`, `.config`) and package-absolute (`app.models`) import specifiers against the repository file index, distinguishes internal from third-party/stdlib dependencies, and persists edges in SQLite's `dependency_graph_edges` table. `GET /api/uploads/{id}/dependency-graph` queries imported dependencies and upstream dependents for any module. 17/17 tests pass.
 
-Next: Phase 12 can migrate both call graph and dependency graph models into Neo4j for multi-hop graph traversal queries.
+## Phase 12 — Neo4j Integration
 
-
-
+Completed: Integrated Neo4j in `docker-compose.yml`, added Python `neo4j` driver, and built `neo4j_client.py` for Cypher query execution. Updated `POST /api/uploads/{id}/call-graph` and `POST /api/uploads/{id}/dependency-graph` to write to Neo4j. Added `GET /api/uploads/{upload_id}/call-graph/traverse` and `GET /api/uploads/{upload_id}/dependency-graph/traverse` endpoints for multi-hop graph queries. Hooked graph deletion into `UploadStore.delete_upload`.

@@ -8,7 +8,7 @@ from .bm25 import BM25Retriever, reciprocal_rank_fusion
 from .callgraph import build_call_graph
 from .depgraph import build_dependency_graph
 from .eval_api import load_default_queries, run_internal_evaluation
-from .models import AnswerRequest, AnswerResponse, CallGraphBuildResponse, CallGraphEdge, CallGraphResponse, Citation, ChunkListResponse, ChunkResponse, CodeChunk, CodeSymbol, DependencyEdge, DependencyGraphBuildResponse, DependencyGraphResponse, EmbeddingResponse, EvalReportResponse, EvalRequest, FileListResponse, FileMetadata, GitFetchResponse, GitUploadRequest, HybridSearchRequest, HybridSearchResponse, HybridSearchResult, ParseResponse, ScanResponse, SimilarityRequest, SimilarityResponse, SimilarityResult, SymbolListResponse, UploadListResponse, UploadResponse
+from .models import AnswerRequest, AnswerResponse, CallGraphBuildResponse, CallGraphEdge, CallGraphResponse, Citation, ChunkListResponse, ChunkResponse, CodeChunk, CodeSymbol, DependencyEdge, DependencyGraphBuildResponse, DependencyGraphResponse, EmbeddingResponse, EvalReportResponse, EvalRequest, FileListResponse, FileMetadata, GitFetchResponse, GitUploadRequest, HybridSearchRequest, HybridSearchResponse, HybridSearchResult, ParseResponse, ScanResponse, SimilarityRequest, SimilarityResponse, SimilarityResult, SymbolListResponse, UploadListResponse, UploadResponse, GraphTraversalResponse, GraphTraversalPath, GraphTraversalNode, GraphTraversalRelationship
 from .chunker import SourceSymbol, chunk_file
 from .embed import EmbeddingClient, FaissIndexStore
 from .gitfetch import GitFetchError, download_archive
@@ -209,6 +209,13 @@ def build_upload_call_graph(upload_id: str, store: UploadStore = Depends(get_sto
         symbols_by_path.setdefault(path, []).append((kind, name, start, end))
     edges = build_call_graph(files, symbols_by_path)
     store.replace_call_graph(upload_id, edges)
+    
+    try:
+        from .neo4j_client import neo4j_client
+        neo4j_client.replace_call_graph(upload_id, edges)
+    except Exception as e:
+        print(f"Neo4j insertion failed: {e}")
+        
     return CallGraphBuildResponse(upload_id=upload_id, edges_indexed=len(edges))
 
 
@@ -245,6 +252,13 @@ def build_upload_dependency_graph(upload_id: str, store: UploadStore = Depends(g
     files = store.list_file_metadata(upload_id)
     edges = build_dependency_graph(files)
     store.replace_dependency_graph(upload_id, edges)
+    
+    try:
+        from .neo4j_client import neo4j_client
+        neo4j_client.replace_dependency_graph(upload_id, edges)
+    except Exception as e:
+        print(f"Neo4j insertion failed: {e}")
+        
     return DependencyGraphBuildResponse(upload_id=upload_id, edges_indexed=len(edges))
 
 
@@ -270,8 +284,32 @@ def get_upload_dependency_graph(
     ]
     return DependencyGraphResponse(upload_id=upload_id, edges=edges, total_edges=len(edges))
 
+@app.get("/api/uploads/{upload_id}/call-graph/traverse", response_model=GraphTraversalResponse)
+def traverse_call_graph(upload_id: str, function_name: str, path: str | None = None, depth: int = 3):
+    from .neo4j_client import neo4j_client
+    try:
+        records = neo4j_client.query_call_graph_traverse(upload_id, function_name, path, depth)
+    except Exception as e:
+        raise HTTPException(500, f"Neo4j traversal failed: {e}")
+        
+    paths = []
+    for r in records:
+        nodes = [GraphTraversalNode(name=n.get("name"), path=n.get("path")) for n in r["path"]]
+        rels = [GraphTraversalRelationship(line=rel.get("line")) for rel in r["relationships"]]
+        paths.append(GraphTraversalPath(nodes=nodes, relationships=rels))
+    return GraphTraversalResponse(upload_id=upload_id, paths=paths)
 
-
-
-
-
+@app.get("/api/uploads/{upload_id}/dependency-graph/traverse", response_model=GraphTraversalResponse)
+def traverse_dependency_graph(upload_id: str, path: str, depth: int = 3):
+    from .neo4j_client import neo4j_client
+    try:
+        records = neo4j_client.query_dependency_graph_traverse(upload_id, path, depth)
+    except Exception as e:
+        raise HTTPException(500, f"Neo4j traversal failed: {e}")
+        
+    paths = []
+    for r in records:
+        nodes = [GraphTraversalNode(path=n.get("path"), is_external=n.get("is_external")) for n in r["path"]]
+        rels = [GraphTraversalRelationship(line=rel.get("line"), specifier=rel.get("specifier")) for rel in r["relationships"]]
+        paths.append(GraphTraversalPath(nodes=nodes, relationships=rels))
+    return GraphTraversalResponse(upload_id=upload_id, paths=paths)

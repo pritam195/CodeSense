@@ -38,6 +38,13 @@ class UploadStore:
         if source_type == "zip":
             archive_path = Path(location).resolve()
             if archive_path.is_relative_to(self.archive_dir.resolve()) and archive_path.is_file(): archive_path.unlink()
+            
+        try:
+            from .neo4j_client import neo4j_client
+            neo4j_client.delete_upload_graph(upload_id)
+        except Exception as e:
+            print(f"Failed to delete Neo4j graph for {upload_id}: {e}")
+            
         return True
     def replace_file_metadata(self,upload_id,files):
         with self._connection() as c:
