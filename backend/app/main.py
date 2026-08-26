@@ -8,7 +8,7 @@ from .bm25 import BM25Retriever, reciprocal_rank_fusion
 from .callgraph import build_call_graph
 from .depgraph import build_dependency_graph
 from .eval_api import load_default_queries, run_internal_evaluation
-from .models import AnswerRequest, AnswerResponse, CallGraphBuildResponse, CallGraphEdge, CallGraphResponse, Citation, ChunkListResponse, ChunkResponse, CodeChunk, CodeSymbol, DependencyEdge, DependencyGraphBuildResponse, DependencyGraphResponse, EmbeddingResponse, EvalReportResponse, EvalRequest, FileListResponse, FileMetadata, GitFetchResponse, GitUploadRequest, HybridSearchRequest, HybridSearchResponse, HybridSearchResult, ParseResponse, ScanResponse, SimilarityRequest, SimilarityResponse, SimilarityResult, SymbolListResponse, UploadListResponse, UploadResponse, GraphTraversalResponse, GraphTraversalPath, GraphTraversalNode, GraphTraversalRelationship
+from .models import AnswerRequest, AnswerResponse, CallGraphBuildResponse, CallGraphEdge, CallGraphResponse, Citation, ChunkListResponse, ChunkResponse, CodeChunk, CodeSymbol, DependencyEdge, DependencyGraphBuildResponse, DependencyGraphResponse, EmbeddingResponse, EvalReportResponse, EvalRequest, FileListResponse, FileMetadata, GitFetchResponse, GitUploadRequest, HybridSearchRequest, HybridSearchResponse, HybridSearchResult, ParseResponse, ScanResponse, SimilarityRequest, SimilarityResponse, SimilarityResult, SymbolListResponse, UploadListResponse, UploadResponse, GraphTraversalResponse, GraphTraversalPath, GraphTraversalNode, GraphTraversalRelationship, FlowSynthesisRequest, FlowSynthesisResponse
 from .chunker import SourceSymbol, chunk_file
 from .embed import EmbeddingClient, FaissIndexStore
 from .gitfetch import GitFetchError, download_archive
@@ -313,3 +313,40 @@ def traverse_dependency_graph(upload_id: str, path: str, depth: int = 3):
         rels = [GraphTraversalRelationship(line=rel.get("line"), specifier=rel.get("specifier")) for rel in r["relationships"]]
         paths.append(GraphTraversalPath(nodes=nodes, relationships=rels))
     return GraphTraversalResponse(upload_id=upload_id, paths=paths)
+
+
+@app.post("/api/uploads/{upload_id}/flow", response_model=FlowSynthesisResponse)
+def synthesize_execution_flow(
+    upload_id: str,
+    request: FlowSynthesisRequest,
+    store: UploadStore = Depends(get_store),
+    embed_client: EmbeddingClient = Depends(get_embedding_client),
+    answer_client: AnswerClient = Depends(get_answer_client),
+) -> FlowSynthesisResponse:
+    """Synthesize a step-by-step execution flow for a broad question.
+
+    Combines hybrid retrieval, call-graph BFS, and topological ordering
+    to produce an ordered list of function steps and a Mermaid diagram.
+    """
+    from .flow_synthesizer import synthesize_flow
+    if store.get_upload(upload_id) is None:
+        raise HTTPException(404, "Upload not found.")
+    try:
+        return synthesize_flow(
+            upload_id=upload_id,
+            question=request.question,
+            depth=request.depth,
+            limit=request.limit,
+            data_dir=settings.data_dir,
+            store=store,
+            embed_client=embed_client,
+            answer_client=answer_client,
+            settings=settings,
+        )
+    except ValueError as exc:
+        msg = str(exc)
+        if msg == "chunk":
+            raise HTTPException(409, "Create chunks before synthesizing a flow.")
+        if msg == "embed":
+            raise HTTPException(409, "Create embeddings before synthesizing a flow.")
+        raise HTTPException(500, msg)

@@ -407,6 +407,96 @@ def test_depgraph_api_endpoints_build_and_query(tmp_path):
     app.dependency_overrides.clear()
 
 
+# ---------------------------------------------------------------------------
+# Phase 13 — Execution Flow Synthesis
+# ---------------------------------------------------------------------------
+
+def _make_flow_archive() -> bytes:
+    """Minimal two-file Python repo with clear caller→callee relationship."""
+    import io, zipfile
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr(
+            "src/auth.py",
+            "import jwt\n\ndef issue_token(user):\n    payload = build_payload(user)\n    return jwt.encode(payload, 'secret')\n\ndef build_payload(user):\n    return {'sub': user.id}\n",
+        )
+        zf.writestr(
+            "src/router.py",
+            "from src.auth import issue_token\n\ndef login(request):\n    token = issue_token(request.user)\n    return {'token': token}\n",
+        )
+    return archive.getvalue()
 
 
+def test_flow_synthesis_returns_409_when_no_chunks(tmp_path):
+    """POST /flow must return 409 before chunks are created."""
+    client, _ = client_for(tmp_path)
+    archive = _make_flow_archive()
+    upload_id = client.post("/api/uploads", files={"file": ("repo.zip", archive)}).json()["id"]
+    # Deliberately skip scan/parse/chunk/embed
+    resp = client.post(f"/api/uploads/{upload_id}/flow", json={"question": "Explain auth"})
+    app.dependency_overrides.clear()
+    assert resp.status_code == 409
 
+
+def test_flow_synthesis_returns_mermaid_and_steps(tmp_path):
+    """Full pipeline: scan→parse→chunk→embed→call-graph→flow returns structured output."""
+    import app.main as main_module
+    from pathlib import Path
+    from unittest.mock import patch
+
+    client, store = client_for(tmp_path)
+    archive = _make_flow_archive()
+
+    # Patch settings.data_dir so embed writes the FAISS index to tmp_path
+    # and the flow endpoint reads from the same location.
+    patched_settings = main_module.settings.__class__(
+        **{**main_module.settings.__dataclass_fields__,
+           "data_dir": tmp_path}
+    )
+    # Use object.__setattr__ because Settings is frozen
+    import dataclasses
+    patched_settings = dataclasses.replace(main_module.settings, data_dir=tmp_path)
+
+    with patch.object(main_module, "settings", patched_settings):
+        # Upload and prepare
+        upload_id = client.post("/api/uploads", files={"file": ("repo.zip", archive)}).json()["id"]
+        assert client.post(f"/api/uploads/{upload_id}/scan").status_code == 200
+        assert client.post(f"/api/uploads/{upload_id}/parse").status_code == 200
+        assert client.post(f"/api/uploads/{upload_id}/chunk").status_code == 200
+        assert client.post(f"/api/uploads/{upload_id}/embed").status_code == 200
+        assert client.post(f"/api/uploads/{upload_id}/call-graph").status_code == 200
+
+        # Patch the AnswerClient so test doesn't need a real API key
+        from app.main import get_answer_client
+        from app.answer import AnswerClient
+
+        mock_client = AnswerClient(api_key=None, model="test")
+
+        def _fake_answer(question, contexts):
+            return "Step 1: login calls issue_token. Step 2: issue_token calls build_payload.", [1]
+
+        mock_client.answer = _fake_answer
+        app.dependency_overrides[get_answer_client] = lambda: mock_client
+
+        resp = client.post(
+            f"/api/uploads/{upload_id}/flow",
+            json={"question": "Explain the authentication flow", "depth": 2, "limit": 6},
+        )
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    # Must have the key fields
+    assert body["upload_id"] == upload_id
+    assert body["question"] == "Explain the authentication flow"
+    assert isinstance(body["steps"], list)
+    assert len(body["steps"]) >= 1
+    assert "mermaid_diagram" in body
+    assert body["mermaid_diagram"].startswith("flowchart")
+    assert isinstance(body["citations"], list)
+    assert len(body["citations"]) >= 1
+    # Every step must have a path and function_name
+    for step in body["steps"]:
+        assert step["function_name"]
+        assert step["path"]

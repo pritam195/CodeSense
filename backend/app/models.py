@@ -120,4 +120,23 @@ class GraphTraversalResponse(BaseModel):
     upload_id: str
     paths: list[GraphTraversalPath]
 
+class FlowStep(BaseModel):
+    function_name: str
+    path: str
+    start_line: int
+    end_line: int
+    depth: int
+    content_snippet: str = ""
 
+class FlowSynthesisRequest(BaseModel):
+    question: str
+    depth: int = 3
+    limit: int = 8
+
+class FlowSynthesisResponse(BaseModel):
+    upload_id: str
+    question: str
+    steps: list[FlowStep]
+    mermaid_diagram: str
+    prose_summary: str
+    citations: list[Citation]

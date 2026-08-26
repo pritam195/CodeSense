@@ -54,3 +54,7 @@ Completed: `POST /api/uploads/{id}/dependency-graph` extracts import and export 
 ## Phase 12 — Neo4j Integration
 
 Completed: Integrated Neo4j in `docker-compose.yml`, added Python `neo4j` driver, and built `neo4j_client.py` for Cypher query execution. Updated `POST /api/uploads/{id}/call-graph` and `POST /api/uploads/{id}/dependency-graph` to write to Neo4j. Added `GET /api/uploads/{upload_id}/call-graph/traverse` and `GET /api/uploads/{upload_id}/dependency-graph/traverse` endpoints for multi-hop graph queries. Hooked graph deletion into `UploadStore.delete_upload`.
+
+## Phase 13 — Execution Flow Synthesis
+
+Completed: `POST /api/uploads/{id}/flow` synthesizes a step-by-step execution flow for broad natural-language questions (e.g. "Explain authentication"). The pipeline: hybrid retrieval finds seed functions → BFS walks the call-graph edges (SQLite) up to configurable depth → Kahn's topological sort orders nodes callers-before-callees → code snippets are attached from the chunk table → a Mermaid `flowchart TD` diagram is built from pure graph structure (no LLM required) → the LLM annotates the ordered steps with prose if an API key is configured, otherwise returns a graceful fallback message. The response includes `steps[]` (function_name, path, line range, depth, snippet), `mermaid_diagram`, `prose_summary`, and `citations[]`. Degrades cleanly to retrieval-order steps when no call graph has been built. 19/19 tests pass.
