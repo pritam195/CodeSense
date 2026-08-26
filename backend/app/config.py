@@ -19,6 +19,7 @@ class Settings:
     answer_model: str = os.getenv("ANSWER_MODEL", "gpt-5-mini")
     answer_context_limit: int = 5
     ignored_directories: frozenset[str] = frozenset({".git", "node_modules", "dist", "build", "coverage", ".next", ".venv", "venv"})
+    ignored_filenames: frozenset[str] = frozenset({"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "Pipfile.lock", "composer.lock", "Gemfile.lock", "Cargo.lock", ".DS_Store", "thumbs.db"})
     source_extensions: frozenset[str] = frozenset({".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".go", ".rs", ".rb", ".php", ".cs", ".cpp", ".c", ".h", ".hpp", ".swift", ".kt", ".kts", ".scala", ".sh", ".sql", ".html", ".css", ".json", ".yaml", ".yml", ".md"})
     cors_origins: tuple[str, ...] = tuple(
         origin.strip()

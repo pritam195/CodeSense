@@ -34,4 +34,4 @@ def _validate_archive(entries, settings: Settings) -> None:
             raise ScanError("Archive contains an unsafe path.")
 
 def _is_ignored(path: PurePosixPath, settings: Settings) -> bool:
-    return any(part in settings.ignored_directories for part in path.parts[:-1])
+    return path.name in settings.ignored_filenames or any(part in settings.ignored_directories for part in path.parts[:-1])

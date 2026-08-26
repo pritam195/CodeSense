@@ -37,7 +37,7 @@ class AnswerClient:
                 model=model,
                 messages=messages,
                 response_format={"type": "json_object"},
-                max_tokens=700
+                max_tokens=2048
             )
             payload = json.loads(response.choices[0].message.content)
             answer, citation_ids = payload["answer"].strip(), payload["citation_ids"]
