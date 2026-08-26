@@ -1,11 +1,52 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import mermaid from 'mermaid'
+import { marked } from 'marked'
 import './styles.css'
+
+mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' })
 
 const api = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 const iconFor = path => path.endsWith('.py') ? '🐍' : path.endsWith('.ts') || path.endsWith('.tsx') ? 'TS' : path.endsWith('.js') || path.endsWith('.jsx') ? 'JS' : '•'
 const makeTree = files => { const root = {}; for (const file of files) { let node = root; const parts = file.path.split('/'); parts.forEach((part, index) => { if (index === parts.length - 1) node[part] = file; else node = node[part] ||= {}; }); } return root }
 const tabLabel = (file, openFiles) => { const base = file.path.split('/').at(-1); const siblings = openFiles.filter(f => f.path.split('/').at(-1) === base); if (siblings.length < 2) return { name: base, dir: null }; const parts = file.path.split('/'); return { name: base, dir: parts.length > 1 ? parts.at(-2) : null }; }
+
+function MermaidDiagram({ chart }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!ref.current || !chart) return
+    const id = 'mermaid-' + Math.random().toString(36).slice(2)
+    mermaid.render(id, chart).then(({ svg }) => {
+      if (ref.current) ref.current.innerHTML = svg
+    }).catch(err => {
+      if (ref.current) ref.current.innerHTML = `<pre style="color:#f87171;white-space:pre-wrap">${chart}</pre>`
+      console.error('Mermaid render error:', err)
+    })
+  }, [chart])
+  return <div ref={ref} className="mermaid-output" />
+}
+
+function AnswerBlock({ answer }) {
+  if (!answer) return null
+  const fmt = answer.format ?? 'text'
+  if (fmt === 'mermaid') {
+    return (
+      <div className="answer-diagram">
+        <span className="answer-format-badge">Diagram</span>
+        <MermaidDiagram chart={answer.answer} />
+      </div>
+    )
+  }
+  if (fmt === 'markdown') {
+    return (
+      <div
+        className="answer-markdown"
+        dangerouslySetInnerHTML={{ __html: marked.parse(answer.answer, { breaks: true, gfm: true }) }}
+      />
+    )
+  }
+  return <p className="answer-text">{answer.answer}</p>
+}
 
 function FileTree({ files, activeFile, onOpen }) {
   const [expanded, setExpanded] = useState(new Set())
@@ -87,7 +128,7 @@ function App() {
         }
       </section>
       <aside className="chat"><div className="chat-header"><div><p className="eyebrow">REPOSITORY CHAT</p><h1>Ask CodeSense</h1></div><span className="status-dot" title="Grounded answers"/></div>
-        <div className="chat-scroll">{error && <div className="error">{error}</div>}{!answer && <div className="chat-empty"><div className="spark">✦</div><h2>Understand this codebase</h2><p>Ask about architecture, flows, or implementation details. Answers cite the exact repository lines used.</p></div>}{answer && <article className="answer"><p className="answer-label">GROUNDED ANSWER</p><p className="answer-text">{answer.answer}</p><div className="citation-title">Sources</div>{answer.citations.map(citation => <button key={citation.path + citation.start_line} onClick={() => openFile(files.find(file => file.path === citation.path))} className="citation"><span>↗</span>{citation.path}<small>Lines {citation.start_line}–{citation.end_line}</small></button>)}</article>}</div>
+        <div className="chat-scroll">{error && <div className="error">{error}</div>}{!answer && <div className="chat-empty"><div className="spark">✦</div><h2>Understand this codebase</h2><p>Ask about architecture, flows, or implementation details. Answers cite the exact repository lines used.</p></div>}{answer && <article className="answer"><p className="answer-label">GROUNDED ANSWER</p><AnswerBlock answer={answer} /><div className="citation-title">Sources</div>{answer.citations.map(citation => <button key={citation.path + citation.start_line} onClick={() => openFile(files.find(file => file.path === citation.path))} className="citation"><span>↗</span>{citation.path}<small>Lines {citation.start_line}–{citation.end_line}</small></button>)}</article>}</div>
         <form onSubmit={ask} className="composer"><textarea value={question} onChange={event => setQuestion(event.target.value)} placeholder={repo ? 'Ask about this repository…' : 'Select a repository first'} disabled={!repo || busy} rows="3"/><div><span>{repo ? 'Answers include citations' : 'No repository selected'}</span><button disabled={!repo || busy || !question.trim()}>{busy ? 'Thinking…' : 'Send ↵'}</button></div></form>
       </aside>
     </div>

@@ -29,7 +29,11 @@ class GitFetchResponse(BaseModel):
 
 class AnswerRequest(BaseModel): question: str; limit: int = 5
 class Citation(BaseModel): path: str; start_line: int; end_line: int
-class AnswerResponse(BaseModel): upload_id: str; answer: str; citations: list[Citation]
+class AnswerResponse(BaseModel):
+    upload_id: str
+    answer: str
+    format: Literal["text", "markdown", "mermaid"] = "text"
+    citations: list[Citation]
 class HybridSearchRequest(BaseModel): query: str; limit: int = 5; vector_weight: float = 0.5
 class HybridSearchResult(BaseModel): path: str; start_line: int; end_line: int; content: str; symbol_name: str | None; rrf_score: float
 class HybridSearchResponse(BaseModel): upload_id: str; results: list[HybridSearchResult]
