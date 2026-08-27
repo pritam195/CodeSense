@@ -1,119 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { motion } from 'framer-motion'
+import { Code2, Menu, MessageSquare } from 'lucide-react'
 import mermaid from 'mermaid'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import TextareaAutosize from 'react-textarea-autosize'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { LibraryPage } from './components/library/LibraryPage'
+import { ExplorerSidebar } from './components/workspace/ExplorerSidebar'
+import { EditorPanel } from './components/workspace/EditorPanel'
+import { ChatPanel } from './components/workspace/ChatPanel'
+import { FileIcon } from './components/workspace/FileTree'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { VscFileCode, VscFolder, VscFolderOpened, VscChevronRight, VscChevronDown, VscFileMedia, VscCode } from 'react-icons/vsc'
 import { SiPython, SiJavascript, SiTypescript, SiHtml5, SiCss, SiReact, SiMarkdown } from 'react-icons/si'
+import { cn } from './lib/utils'
 import './styles.css'
 
-mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' })
-
 const api = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
-const FileIcon = ({ path }) => {
-  if (path.endsWith('.py')) return <SiPython color="#3776AB" />
-  if (path.endsWith('.js')) return <SiJavascript color="#F7DF1E" />
-  if (path.endsWith('.jsx')) return <SiReact color="#61DAFB" />
-  if (path.endsWith('.ts')) return <SiTypescript color="#3178C6" />
-  if (path.endsWith('.tsx')) return <SiReact color="#61DAFB" />
-  if (path.endsWith('.html')) return <SiHtml5 color="#E34F26" />
-  if (path.endsWith('.css')) return <SiCss color="#1572B6" />
-  if (path.endsWith('.md')) return <SiMarkdown color="#ffffff" />
-  if (path.endsWith('.json')) return <VscCode color="#cbcb41" />
-  return <VscFileCode color="#cccccc" />
-}
-const makeTree = files => { const root = {}; for (const file of files) { let node = root; const parts = file.path.split('/'); parts.forEach((part, index) => { if (index === parts.length - 1) node[part] = file; else node = node[part] ||= {}; }); } return root }
-const tabLabel = (file, openFiles) => { const base = file.path.split('/').at(-1); const siblings = openFiles.filter(f => f.path.split('/').at(-1) === base); if (siblings.length < 2) return { name: base, dir: null }; const parts = file.path.split('/'); return { name: base, dir: parts.length > 1 ? parts.at(-2) : null }; }
 
-function MermaidDiagram({ chart }) {
-  const ref = useRef(null)
-  useEffect(() => {
-    if (!ref.current || !chart) return
-    const id = 'mermaid-' + Math.random().toString(36).slice(2)
-    
-    // Clean up chart syntax to handle common LLM mistakes
-    let cleanChart = chart
-      .replace(/^```[a-zA-Z]*\s*/i, '')
-      .replace(/\s*```$/, '')
-      .trim()
-    
-    // Auto-quote edge labels: -->|text| -> -->|"text"| if not already quoted
-    cleanChart = cleanChart.replace(/(-->|-\.->|==>|---|===|-.-)\s*\|([^|]+)\|/g, (match, arrow, p1) => {
-      const trimmed = p1.trim()
-      if (!trimmed.startsWith('"') && !trimmed.endsWith('"')) {
-        return `${arrow}|"${trimmed}"|`
-      }
-      return match
-    })
 
-    mermaid.render(id, cleanChart).then(({ svg }) => {
-      if (ref.current) ref.current.innerHTML = svg
-    }).catch(err => {
-      if (ref.current) ref.current.innerHTML = `<pre style="color:#f87171;white-space:pre-wrap">${chart}</pre>`
-      console.error('Mermaid render error:', err)
-    })
-  }, [chart])
-  return <div ref={ref} className="mermaid-output" />
-}
-
-function AnswerBlock({ answer }) {
-  if (!answer) return null
-  const fmt = answer.format ?? 'text'
-  if (fmt === 'mermaid') {
-    return (
-      <div className="answer-diagram">
-        <span className="answer-format-badge">Diagram</span>
-        <MermaidDiagram chart={answer.answer} />
-      </div>
-    )
-  }
-  if (fmt === 'markdown') {
-    return (
-      <div className="answer-markdown">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            code({ node, className, children, ...props }) {
-              const match = /language-(\w+)/.exec(className || '')
-              return match ? (
-                <SyntaxHighlighter
-                  {...props}
-                  PreTag="div"
-                  children={String(children).replace(/\n$/, '')}
-                  language={match[1]}
-                  style={vscDarkPlus}
-                  customStyle={{ margin: '1em 0', padding: '16px', borderRadius: '4px', fontSize: '13px' }}
-                />
-              ) : (
-                <code {...props} className={className}>
-                  {children}
-                </code>
-              )
-            }
-          }}
-        >
-          {answer.answer}
-        </ReactMarkdown>
-      </div>
-    )
-  }
-  return <p className="answer-text">{answer.answer}</p>
-}
-
-function FileTree({ files, activeFile, onOpen }) {
-  const [expanded, setExpanded] = useState(new Set())
-  const root = useMemo(() => makeTree(files), [files])
-  const render = (node, depth = 0, parent = '') => Object.entries(node).sort(([a, valueA], [b, valueB]) => (typeof valueA === 'object' && !valueA.path ? -1 : 1) - (typeof valueB === 'object' && !valueB.path ? -1 : 1) || a.localeCompare(b)).map(([name, value]) => {
-    const folder = typeof value === 'object' && !value.path
-    const key = `${parent}/${name}`
-    if (folder) { const isOpen = expanded.has(key); return <div key={key}><button style={{ paddingLeft: 8 + depth * 14 }} className="tree-folder" onClick={() => setExpanded(previous => { const next = new Set(previous); isOpen ? next.delete(key) : next.add(key); return next })}><span>{isOpen ? <VscChevronDown /> : <VscChevronRight />}</span><span>{isOpen ? <VscFolderOpened color="#dcb67a" /> : <VscFolder color="#dcb67a" />}</span><span className="truncate">{name}</span></button>{isOpen && render(value, depth + 1, key)}</div> }
-    return <button key={value.path} style={{ paddingLeft: 26 + depth * 14 }} onClick={() => onOpen(value)} className={`file-item ${activeFile?.path === value.path ? 'selected' : ''}`}><span className="file-icon" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}><FileIcon path={value.path} /></span><span className="truncate">{name}</span></button>
-  })
-  return <nav className="file-tree">{render(root)}</nav>
-}
 
 function useResizer(defaultWidth, minWidth, maxWidth, reverse = false) {
   const [width, setWidth] = useState(defaultWidth);
@@ -148,9 +55,12 @@ function useResizer(defaultWidth, minWidth, maxWidth, reverse = false) {
 function App() {
   const [uploads, setUploads] = useState([]), [repo, setRepo] = useState(), [screen, setScreen] = useState('library'), [files, setFiles] = useState([])
   const [openFiles, setOpenFiles] = useState([]), [activeFile, setActiveFile] = useState(null)
-  const [question, setQuestion] = useState(''), [gitUrl, setGitUrl] = useState(''), [answer, setAnswer] = useState(), [busy, setBusy] = useState(false), [error, setError] = useState(''), [zip, setZip] = useState()
+  const [question, setQuestion] = useState(''), [gitUrl, setGitUrl] = useState(''), [messages, setMessages] = useState([]), [busy, setBusy] = useState(false), [error, setError] = useState(''), [zip, setZip] = useState()
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [mobileExplorerOpen, setMobileExplorerOpen] = useState(false)
+  const [mobileChatOpen, setMobileChatOpen] = useState(false)
   const call = async (path, options) => { const response = await fetch(api + path, options); const payload = response.status === 204 ? null : await response.json(); if (!response.ok) throw Error(payload?.detail || 'Request failed.'); return payload }
-  useEffect(() => { call('/api/uploads').then(payload => setUploads(payload.uploads)).catch(error => setError(error.message)) }, [])
+  useEffect(() => { call('/api/uploads').then(payload => setUploads(payload.uploads)).catch(error => setError(error.message)).finally(() => setInitialLoading(false)) }, [])
   const lines = useMemo(() => activeFile?.content?.split('\n') ?? [], [activeFile])
 
   function openFile(file) {
@@ -172,75 +82,183 @@ function App() {
     })
   }
 
-  async function choose(item) { setRepo(item); setScreen('workspace'); setOpenFiles([]); setActiveFile(null); setAnswer(); setError(''); try { const payload = await call(`/api/uploads/${item.id}/files`); setFiles(payload.files); if (payload.files[0]) openFile(payload.files[0]); setError('') } catch { setFiles([]) } }
-  async function upload(event) { event.preventDefault(); if (!zip) return; setBusy(true); try { const body = new FormData(); body.append('file', zip); const saved = await call('/api/uploads', { method: 'POST', body }); setUploads((await call('/api/uploads')).uploads); choose(saved) } catch (error) { setError(error.message) } finally { setBusy(false) } }
-  async function saveGit(event) { event.preventDefault(); if (!gitUrl.trim()) return; setBusy(true); setError(''); try { const saved = await call('/api/uploads/git', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: gitUrl.trim() }) }); setUploads((await call('/api/uploads')).uploads); setGitUrl(''); await choose(saved); setError('') } catch (error) { setError(error.message) } finally { setBusy(false) } }
-  async function removeRepo(item) { if (!item || !confirm(`Remove ${item.original_name}? This also removes its local index.`)) return; setBusy(true); try { await call(`/api/uploads/${item.id}`, { method: 'DELETE' }); setUploads(items => items.filter(entry => entry.id !== item.id)); if (repo?.id === item.id) { setRepo(); setFiles([]); setOpenFiles([]); setActiveFile(null); setAnswer(); setScreen('library') } } catch (error) { setError(error.message) } finally { setBusy(false) } }
+  async function choose(item) { setRepo(item); setScreen('workspace'); setOpenFiles([]); setActiveFile(null); setMessages([]); setError(''); try { const payload = await call(`/api/uploads/${item.id}/files`); setFiles(payload.files); if (payload.files[0]) openFile(payload.files[0]); setError('') } catch { setFiles([]) } }
+
   async function prepare() { setBusy(true); setError(''); try { let current = repo; if (current.source_type === 'git_url') { await call(`/api/uploads/${current.id}/fetch`, { method: 'POST' }); current = { ...current, source_type: 'zip' }; setRepo(current); setUploads(items => items.map(item => item.id === current.id ? current : item)) } for (const step of ['scan', 'parse', 'chunk', 'embed']) await call(`/api/uploads/${current.id}/${step}`, { method: 'POST' }); const indexed = await call(`/api/uploads/${current.id}/files`); setFiles(indexed.files); setOpenFiles([]); setActiveFile(null); if (indexed.files[0]) openFile(indexed.files[0]); setError('') } catch (error) { setError(error.message) } finally { setBusy(false) } }
-  async function ask(event) { event.preventDefault(); if (!question.trim()) return; setBusy(true); setError(''); try { setAnswer(await call(`/api/uploads/${repo.id}/answer`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, limit: 5 }) })) } catch (error) { setError(error.message) } finally { setBusy(false) } }
+
+  async function ask(event, overrideQuestion) {
+    if (event) event.preventDefault();
+    const q = (overrideQuestion ?? question).trim();
+    if (!q) return;
+    setQuestion('');
+    // If it's a regenerate, we don't necessarily want to duplicate the user message
+    // but for simplicity, we can just let it act as a new query, or we can pop the last assistant message.
+    // Let's pop the last assistant message if we are regenerating.
+    if (overrideQuestion) {
+      setMessages(prev => {
+        const newMsgs = [...prev];
+        if (newMsgs.length > 0 && newMsgs[newMsgs.length - 1].role === 'assistant') {
+          newMsgs.pop();
+        }
+        return newMsgs;
+      });
+    } else {
+      setMessages(prev => [...prev, { role: 'user', content: q }]);
+    }
+    
+    setBusy(true);
+    setError('');
+    try {
+      const payload = await call(`/api/uploads/${repo.id}/answer`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: q, limit: 5 }) });
+      setMessages(prev => [...prev, { role: 'assistant', ...payload }]);
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const [leftWidth, startLeftDrag, isLeftDragging] = useResizer(240, 150, 400);
   const [rightWidth, startRightDrag, isRightDragging] = useResizer(340, 250, 600, true);
 
-  if (screen === 'library') return <main className="library-page"><header className="library-header"><span className="brand-mark">◈</span><strong>CodeSense</strong><span className="topbar-separator"/><span className="muted">Repository intelligence</span></header><section className="library-content"><div className="library-intro"><p className="eyebrow">YOUR WORKSPACE</p><h1>Choose a repository to explore</h1><p>Upload a ZIP or import a public GitHub repository. Select one to browse its source and ask grounded questions.</p></div><div className="import-grid"><form onSubmit={upload} className="import-card"><span className="import-icon">↑</span><h2>Upload a ZIP</h2><p>Index a local project archive.</p><input id="zip-input" type="file" accept=".zip" onChange={event => setZip(event.target.files?.[0])}/><button disabled={!zip || busy}>{busy ? 'Uploading…' : 'Choose ZIP file'}</button></form><form onSubmit={saveGit} className="import-card"><span className="import-icon">⌘</span><h2>Import from GitHub</h2><p>Public repositories only; no clone or execution.</p><input value={gitUrl} onChange={event => setGitUrl(event.target.value)} placeholder="https://github.com/owner/repo" type="url" required/><button disabled={!gitUrl.trim() || busy}>{busy ? 'Saving…' : 'Add GitHub repository'}</button></form></div>{error && <div className="library-error">{error}</div>}<div className="library-list-heading"><div><p className="eyebrow">SAVED REPOSITORIES</p><h2>Your library</h2></div><span>{uploads.length} repositories</span></div><div className="repository-grid">{uploads.length === 0 ? <p className="empty">Your uploaded repositories will appear here.</p> : uploads.map(item => <article key={item.id} className="repository-card"><div className="repo-card-icon">{item.source_type === 'git_url' ? '⌘' : '▣'}</div><div><h3>{item.original_name}</h3><p>{item.source_type === 'git_url' ? 'GitHub repository' : 'ZIP archive'}</p></div><div className="repository-actions"><button onClick={() => choose(item)}>Open workspace <span>→</span></button><button className="library-remove" onClick={() => removeRepo(item)} disabled={busy}>Remove</button></div></article>)}</div></section></main>
+  if (screen === 'library') {
+    return (
+      <LibraryPage
+        uploads={uploads}
+        setUploads={setUploads}
+        setRepo={setRepo}
+        setScreen={setScreen}
+        setOpenFiles={setOpenFiles}
+        setActiveFile={setActiveFile}
+        setMessages={setMessages}
+        setError={setError}
+        error={error}
+        busy={busy}
+        setBusy={setBusy}
+        call={call}
+        initialLoading={initialLoading}
+      />
+    )
+  }
 
-  return <main className="workspace">
-    <header className="topbar"><span className="brand-mark">◈</span><strong>CodeSense</strong><span className="topbar-separator"/><span className="muted">Repository intelligence</span>{repo && <span className="repo-chip">{repo.original_name}</span>}</header>
-    <div className="shell" style={{ gridTemplateColumns: `${leftWidth}px 4px 1fr 4px ${rightWidth}px` }}>
-      <aside className="explorer"><div className="pane-heading"><span>EXPLORER</span><button title="Back to repository library" onClick={() => setScreen('library')}>←</button></div>
-        {repo && <><div className="workspace-repo-name"><span>⌕</span><strong className="truncate">{repo.original_name}</strong></div><button className="prepare workspace-prepare" onClick={prepare} disabled={busy}>{busy ? 'Working…' : files.length === 0 ? (repo.source_type === 'git_url' ? 'Fetch & prepare' : 'Prepare repository') : 'Re-index repository'}</button><p className="section-label">FILES</p>{files.length === 0 ? <p className="empty tree-empty">Prepare this repository to browse files.</p> : <FileTree files={files} activeFile={activeFile} onOpen={openFile} />}</>}
-      </aside>
-      <div className={`resizer ${isLeftDragging ? 'dragging' : ''}`} onMouseDown={startLeftDrag} />
-      <section className="editor">
-        <div className="tabbar">
-          {openFiles.length === 0
-            ? <span className="editor-hint">Open a file from the explorer</span>
-            : openFiles.map(file => (
-                <div
-                  key={file.path}
-                  className={`editor-tab${activeFile?.path === file.path ? ' active' : ''}`}
-                  onClick={() => setActiveFile(file)}
-                  title={file.path}
-                >
-                  <span className="tab-icon" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}><FileIcon path={file.path} /></span>
-                  <span className="tab-name">
-                    {(() => { const { name, dir } = tabLabel(file, openFiles); return dir ? <><span className="tab-dir">{dir} /</span> {name}</> : name })()}
-                  </span>
-                  <button className="tab-close" onClick={e => closeTab(file, e)}>×</button>
-                </div>
-              ))
-          }
+  return (
+    <main className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
+      {/* Topbar */}
+      <header className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-surface px-4 shadow-sm z-20">
+        <div className="flex items-center gap-3">
+          {screen === 'workspace' && (
+            <button 
+              className="md:hidden flex h-7 w-7 items-center justify-center rounded hover:bg-secondary text-muted-foreground transition-colors"
+              onClick={() => setMobileExplorerOpen(!mobileExplorerOpen)}
+            >
+              <Menu size={16} />
+            </button>
+          )}
+          <div className="flex h-7 w-7 items-center justify-center rounded bg-accent/10 text-accent">
+            <Code2 size={16} />
+          </div>
+          <strong className="text-[13px] font-semibold tracking-wide text-foreground">CodeSense</strong>
+          <span className="h-4 w-px bg-border mx-1" />
+          <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground hidden sm:block">Repository Intelligence</span>
         </div>
-        {activeFile
-          ? <><div className="breadcrumb">{activeFile.path.split('/').join('  /  ')}</div><div className="code-area" style={{ padding: 0 }}><SyntaxHighlighter language={activeFile.path.split('.').pop()} style={vscDarkPlus} showLineNumbers={true} customStyle={{ margin: 0, padding: '16px', backgroundColor: 'transparent', fontSize: '13px' }} codeTagProps={{ style: { fontFamily: 'inherit' } }}>{activeFile.content || ' '}</SyntaxHighlighter></div></>
-          : <div className="empty-editor"><span>CodeSense</span><p>Select and prepare a repository, then open a file.</p></div>
-        }
-      </section>
-      <div className={`resizer ${isRightDragging ? 'dragging' : ''}`} onMouseDown={startRightDrag} />
-      <aside className="chat"><div className="chat-header"><div><p className="eyebrow" style={{ fontSize: '12px', margin: 0 }}>REPOSITORY CHAT</p></div><span className="status-dot" title="Grounded answers"/></div>
-        <div className="chat-scroll">{error && <div className="error">{error}</div>}{!answer && <div className="chat-empty"><div className="spark">✦</div><h2>Understand this codebase</h2><p>Ask about architecture, flows, or implementation details. Answers cite the exact repository lines used.</p></div>}{answer && <article className="answer"><p className="answer-label">GROUNDED ANSWER</p><AnswerBlock answer={answer} /><div className="citation-title">Sources</div>{answer.citations.map(citation => <button key={citation.path + citation.start_line} onClick={() => openFile(files.find(file => file.path === citation.path))} className="citation"><span>↗</span>{citation.path}<small>Lines {citation.start_line}–{citation.end_line}</small></button>)}</article>}</div>
-        <form onSubmit={ask} className="composer">
-          <TextareaAutosize
-            value={question}
-            onChange={event => setQuestion(event.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                ask(e)
-              }
-            }}
-            placeholder={repo ? 'Ask about this repository…' : 'Select a repository first'}
-            disabled={!repo || busy}
-            minRows={1}
-            maxRows={8}
+        
+        {repo && (
+          <div className="flex items-center gap-2">
+            <div className="hidden sm:flex items-center gap-2 rounded-full border border-border/50 bg-background/50 px-3 py-1 shadow-inner">
+              <span className="text-xs font-medium text-muted-foreground truncate max-w-[200px]">
+                {repo.original_name.split('/').pop()}
+              </span>
+            </div>
+            {screen === 'workspace' && (
+              <button 
+                className="lg:hidden flex h-7 w-7 items-center justify-center rounded hover:bg-secondary text-muted-foreground transition-colors"
+                onClick={() => setMobileChatOpen(!mobileChatOpen)}
+              >
+                <MessageSquare size={16} />
+              </button>
+            )}
+          </div>
+        )}
+      </header>
+
+      {/* Main Shell */}
+      <motion.div 
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.3 }}
+        className="relative flex min-h-0 flex-1 w-full"
+      >
+        {/* Explorer Panel */}
+        <div 
+          className={cn(
+            "shrink-0 flex min-h-0 overflow-hidden absolute md:relative z-30 h-full shadow-2xl md:shadow-none bg-surface transition-transform duration-300 md:translate-x-0 md:flex",
+            mobileExplorerOpen ? "translate-x-0" : "-translate-x-full"
+          )} 
+          style={{ width: leftWidth }}
+        >
+          <ExplorerSidebar 
+            repo={repo} 
+            files={files} 
+            activeFile={activeFile} 
+            onOpen={(f) => { openFile(f); setMobileExplorerOpen(false); }} 
+            onBack={() => setScreen('library')} 
+            prepare={prepare} 
+            busy={busy} 
           />
-          <button disabled={!repo || busy || !question.trim()} title="Send message">
-            ↑
-          </button>
-        </form>
-      </aside>
-    </div>
-  </main>
+        </div>
+
+        {/* Left Resizer */}
+        <div 
+          className="group relative z-10 hidden w-1 shrink-0 cursor-col-resize items-center justify-center md:flex"
+          onMouseDown={startLeftDrag}
+        >
+          <div className={`absolute inset-y-0 -left-1 -right-1 z-20`} />
+          <div className={`h-full w-[1px] bg-border transition-colors group-hover:bg-accent ${isLeftDragging ? 'bg-accent' : ''}`} />
+        </div>
+
+        {/* Editor Panel */}
+        <div className="flex min-h-0 flex-1 min-w-0 flex-col overflow-hidden bg-[#0d1117]">
+          <EditorPanel 
+            openFiles={openFiles} 
+            activeFile={activeFile} 
+            setActiveFile={setActiveFile} 
+            closeTab={closeTab} 
+            highlightedLines={[]} 
+          />
+        </div>
+
+        {/* Right Resizer */}
+        <div 
+          className="group relative z-10 hidden w-1 shrink-0 cursor-col-resize items-center justify-center lg:flex"
+          onMouseDown={startRightDrag}
+        >
+          <div className={`absolute inset-y-0 -left-1 -right-1 z-20`} />
+          <div className={`h-full w-[1px] bg-border transition-colors group-hover:bg-accent ${isRightDragging ? 'bg-accent' : ''}`} />
+        </div>
+
+        {/* Chat Panel */}
+        <div 
+          className={cn(
+            "shrink-0 flex min-h-0 overflow-hidden absolute lg:relative right-0 z-30 h-full shadow-2xl lg:shadow-none bg-surface transition-transform duration-300 lg:translate-x-0 lg:flex",
+            mobileChatOpen ? "translate-x-0" : "translate-x-full"
+          )} 
+          style={{ width: rightWidth }}
+        >
+          <ChatPanel 
+            repo={repo} 
+            files={files} 
+            messages={messages} 
+            question={question} 
+            setQuestion={setQuestion} 
+            ask={ask} 
+            busy={busy} 
+            error={error} 
+            openFile={openFile} 
+          />
+        </div>
+      </motion.div>
+    </main>
+  )
 }
 createRoot(document.getElementById('root')).render(<App />)
 

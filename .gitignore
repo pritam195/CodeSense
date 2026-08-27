@@ -6,3 +6,8 @@ backend/data/
 frontend/node_modules/
 frontend/dist/
 
+# Scratch / temporary files
+scratch_test.py
+backend/test_json.py
+PROGRESS.md
+
