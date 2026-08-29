@@ -10,7 +10,7 @@ import { cn } from '../../lib/utils'
 
 import { Skeleton } from '../ui/Skeleton'
 
-export function LibraryPage({ uploads, setUploads, setRepo, setScreen, setOpenFiles, setActiveFile, setMessages, setError, error, busy, setBusy, call, initialLoading }) {
+export function LibraryPage({ uploads, setUploads, setRepo, setScreen, setOpenFiles, setActiveFile, setMessages, setError, error, busy, setBusy, call, initialLoading, choose: propChoose }) {
   const [zip, setZip] = useState(null)
   const [gitUrl, setGitUrl] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
@@ -19,6 +19,9 @@ export function LibraryPage({ uploads, setUploads, setRepo, setScreen, setOpenFi
 
   // Handlers for generic library actions
   async function choose(item) { 
+    if (propChoose) {
+      return propChoose(item)
+    }
     setRepo(item); 
     setScreen('workspace'); 
     setOpenFiles([]); 
@@ -26,8 +29,15 @@ export function LibraryPage({ uploads, setUploads, setRepo, setScreen, setOpenFi
     setMessages([]); 
     setError(''); 
     try { 
-      // Preheat files so workspace is ready
-      await call(`/api/uploads/${item.id}/files`); 
+      const [filePayload, msgPayload] = await Promise.all([
+        call(`/api/uploads/${item.id}/files`),
+        call(`/api/uploads/${item.id}/messages`).catch(() => ({ messages: [] }))
+      ])
+      if (filePayload?.files?.[0]) {
+        setOpenFiles([filePayload.files[0]])
+        setActiveFile(filePayload.files[0])
+      }
+      setMessages(msgPayload?.messages || [])
     } catch { 
       // Do nothing, workspace handles empty files state
     } 
@@ -121,15 +131,6 @@ export function LibraryPage({ uploads, setUploads, setRepo, setScreen, setOpenFi
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-40 flex h-16 items-center gap-4 border-b border-border bg-background/80 px-6 backdrop-blur-md">
-        <div className="flex items-center gap-2">
-          <span className="text-xl font-bold text-accent">◈</span>
-          <strong className="text-lg font-bold tracking-tight">CodeSense</strong>
-        </div>
-        <div className="h-5 w-px bg-border mx-2" />
-        <span className="text-sm font-medium text-muted-foreground hidden sm:block">Repository Intelligence</span>
-      </header>
-
       <main className="mx-auto max-w-6xl px-6 py-12">
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mb-12 text-center md:text-left">
           <h1 className="text-4xl font-extrabold tracking-tight lg:text-5xl">Your Workspaces</h1>

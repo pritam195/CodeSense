@@ -1,6 +1,6 @@
 from pathlib import Path
 from urllib.parse import urlparse
-from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile, status
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from .config import Settings
 from .answer import AnswerClient, AnswerError
@@ -8,7 +8,18 @@ from .bm25 import BM25Retriever, reciprocal_rank_fusion
 from .callgraph import build_call_graph
 from .depgraph import build_dependency_graph
 from .eval_api import load_default_queries, run_internal_evaluation
-from .models import AnswerRequest, AnswerResponse, CallGraphBuildResponse, CallGraphEdge, CallGraphResponse, Citation, ChunkListResponse, ChunkResponse, CodeChunk, CodeSymbol, DependencyEdge, DependencyGraphBuildResponse, DependencyGraphResponse, EmbeddingResponse, EvalReportResponse, EvalRequest, FileListResponse, FileMetadata, GitFetchResponse, GitUploadRequest, HybridSearchRequest, HybridSearchResponse, HybridSearchResult, ParseResponse, ScanResponse, SimilarityRequest, SimilarityResponse, SimilarityResult, SymbolListResponse, UploadListResponse, UploadResponse, GraphTraversalResponse, GraphTraversalPath, GraphTraversalNode, GraphTraversalRelationship, FlowSynthesisRequest, FlowSynthesisResponse
+from .models import (
+    AnswerRequest, AnswerResponse, CallGraphBuildResponse, CallGraphEdge, CallGraphResponse,
+    Citation, ChunkListResponse, ChunkResponse, CodeChunk, CodeSymbol, DependencyEdge,
+    DependencyGraphBuildResponse, DependencyGraphResponse, EmbeddingResponse, EvalReportResponse,
+    EvalRequest, FileListResponse, FileMetadata, GitFetchResponse, GitUploadRequest,
+    HybridSearchRequest, HybridSearchResponse, HybridSearchResult, ParseResponse, ScanResponse,
+    SimilarityRequest, SimilarityResponse, SimilarityResult, SymbolListResponse,
+    UploadListResponse, UploadResponse, GraphTraversalResponse, GraphTraversalPath,
+    GraphTraversalNode, GraphTraversalRelationship, FlowSynthesisRequest, FlowSynthesisResponse,
+    UserSignupRequest, UserLoginRequest, UserResponse, AuthTokenResponse, UserProfileUpdateRequest,
+    ChatMessage, ChatHistoryResponse
+)
 from .chunker import SourceSymbol, chunk_file
 from .embed import EmbeddingClient, FaissIndexStore
 from .gitfetch import GitFetchError, download_archive
@@ -31,29 +42,86 @@ def get_answer_client() -> AnswerClient:
 def get_store() -> UploadStore:
     return UploadStore(settings.data_dir)
 
+def get_current_user_optional(authorization: str | None = Header(default=None), store: UploadStore = Depends(get_store)) -> dict | None:
+    if not authorization:
+        return None
+    token = authorization.replace("Bearer ", "").strip()
+    return store.get_user_by_token(token)
+
+def get_current_user(authorization: str | None = Header(default=None), store: UploadStore = Depends(get_store)) -> dict:
+    user = get_current_user_optional(authorization, store)
+    if not user:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired authentication session.")
+    return user
+
 def to_response(upload) -> UploadResponse:
     return UploadResponse(id=upload.id, source_type=upload.source_type, original_name=upload.original_name, created_at=upload.created_at)
 
 @app.get("/health")
 def health() -> dict[str, str]: return {"status": "ok"}
 
+# ---------------- Authentication Endpoints ----------------
+@app.post("/api/auth/signup", response_model=AuthTokenResponse, status_code=status.HTTP_201_CREATED)
+def signup(req: UserSignupRequest, store: UploadStore = Depends(get_store)) -> AuthTokenResponse:
+    try:
+        user = store.create_user(req.email, req.username, req.password, req.avatar_url)
+        token = store.create_session(user["id"])
+        return AuthTokenResponse(token=token, user=UserResponse(**user))
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+
+@app.post("/api/auth/login", response_model=AuthTokenResponse)
+def login(req: UserLoginRequest, store: UploadStore = Depends(get_store)) -> AuthTokenResponse:
+    try:
+        user = store.authenticate_user(req.email, req.password)
+        token = store.create_session(user["id"])
+        return AuthTokenResponse(token=token, user=UserResponse(**user))
+    except ValueError as e:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(e))
+
+@app.get("/api/auth/me", response_model=UserResponse)
+def get_me(user: dict = Depends(get_current_user)) -> UserResponse:
+    return UserResponse(**user)
+
+@app.post("/api/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(authorization: str | None = Header(default=None), store: UploadStore = Depends(get_store)):
+    if authorization:
+        token = authorization.replace("Bearer ", "").strip()
+        store.delete_session(token)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+@app.put("/api/auth/profile", response_model=UserResponse)
+def update_profile(req: UserProfileUpdateRequest, user: dict = Depends(get_current_user), store: UploadStore = Depends(get_store)) -> UserResponse:
+    updated = store.update_user_profile(user["id"], req.username, req.avatar_url)
+    if not updated:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    return UserResponse(**updated)
+
+@app.get("/api/auth/stats")
+def get_stats(user: dict = Depends(get_current_user), store: UploadStore = Depends(get_store)) -> dict:
+    return store.get_user_stats(user["id"])
+
+# ---------------- Uploads Endpoints ----------------
 @app.get("/api/uploads", response_model=UploadListResponse)
-def list_uploads(store: UploadStore = Depends(get_store)) -> UploadListResponse:
-    return UploadListResponse(uploads=[UploadResponse(id=item[0], source_type=item[1], original_name=item[2], created_at=item[3]) for item in store.list_uploads()])
+def list_uploads(store: UploadStore = Depends(get_store), current_user: dict | None = Depends(get_current_user_optional)) -> UploadListResponse:
+    user_id = current_user["id"] if current_user else None
+    return UploadListResponse(uploads=[UploadResponse(id=item[0], source_type=item[1], original_name=item[2], created_at=item[3]) for item in store.list_uploads(user_id=user_id)])
 
 @app.post("/api/uploads", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
-async def upload_archive(file: UploadFile = File(...), store: UploadStore = Depends(get_store)) -> UploadResponse:
+async def upload_archive(file: UploadFile = File(...), store: UploadStore = Depends(get_store), current_user: dict | None = Depends(get_current_user_optional)) -> UploadResponse:
     filename = file.filename or ""
     if Path(filename).suffix.lower() != ".zip": raise HTTPException(400, "Only .zip repository archives are accepted.")
     content = await file.read(settings.max_upload_bytes + 1)
     if len(content) > settings.max_upload_bytes: raise HTTPException(413, "Archive exceeds the 50 MiB upload limit.")
-    return to_response(store.create_archive(filename, content))
+    user_id = current_user["id"] if current_user else None
+    return to_response(store.create_archive(filename, content, user_id=user_id))
 
 @app.post("/api/uploads/git", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
-def upload_git_url(request: GitUploadRequest, store: UploadStore = Depends(get_store)) -> UploadResponse:
+def upload_git_url(request: GitUploadRequest, store: UploadStore = Depends(get_store), current_user: dict | None = Depends(get_current_user_optional)) -> UploadResponse:
     parsed = urlparse(request.url)
     if parsed.scheme != "https" or parsed.netloc.lower() != "github.com": raise HTTPException(400, "Use a public https://github.com/owner/repository URL.")
-    return to_response(store.create_git_url(request.url))
+    user_id = current_user["id"] if current_user else None
+    return to_response(store.create_git_url(request.url, user_id=user_id))
 
 @app.delete("/api/uploads/{upload_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_upload(upload_id: str, store: UploadStore = Depends(get_store)) -> Response:
@@ -176,11 +244,36 @@ def answer_repository(upload_id: str, request: AnswerRequest, store: UploadStore
     bm25_matches = BM25Retriever([f"File: {chunk[0]}\n{chunk[3]}" for chunk in chunks]).search(request.question, limit=min(request.limit * 2, settings.answer_context_limit * 2))
     fused = reciprocal_rank_fusion(vector_matches, bm25_matches, limit=min(request.limit, settings.answer_context_limit))
     contexts = [{"id": position + 1, "path": chunks[index][0], "start_line": chunks[index][1], "end_line": chunks[index][2], "content": chunks[index][3]} for position, (index, _) in enumerate(fused)]
-    if not contexts: raise HTTPException(404, "No relevant source chunks were found.")
     try: answer, citation_ids, fmt = client.answer(request.question, contexts)
     except AnswerError as error: raise HTTPException(503, str(error)) from error
     by_id = {context["id"]: context for context in contexts}
-    return AnswerResponse(upload_id=upload_id, answer=answer, format=fmt, citations=[Citation(path=by_id[item]["path"], start_line=by_id[item]["start_line"], end_line=by_id[item]["end_line"]) for item in citation_ids])
+    citations_list = [Citation(path=by_id[item]["path"], start_line=by_id[item]["start_line"], end_line=by_id[item]["end_line"]) for item in citation_ids]
+    # Persist chat turns in database
+    store.add_chat_message(upload_id, role="user", content=request.question)
+    store.add_chat_message(upload_id, role="assistant", content=answer, format=fmt, citations=[c.model_dump() for c in citations_list])
+    return AnswerResponse(upload_id=upload_id, answer=answer, format=fmt, citations=citations_list)
+
+@app.get("/api/uploads/{upload_id}/messages", response_model=ChatHistoryResponse)
+def list_messages(upload_id: str, store: UploadStore = Depends(get_store)) -> ChatHistoryResponse:
+    rows = store.list_chat_messages(upload_id)
+    messages = [
+        ChatMessage(
+            id=r["id"],
+            upload_id=r["upload_id"],
+            role=r["role"],
+            content=r["content"],
+            format=r["format"],
+            citations=[Citation(**c) for c in r.get("citations", [])],
+            created_at=r["created_at"]
+        )
+        for r in rows
+    ]
+    return ChatHistoryResponse(upload_id=upload_id, messages=messages)
+
+@app.delete("/api/uploads/{upload_id}/messages", status_code=status.HTTP_204_NO_CONTENT)
+def clear_messages(upload_id: str, store: UploadStore = Depends(get_store)):
+    store.clear_chat_messages(upload_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.post("/api/uploads/{upload_id}/evaluate", response_model=EvalReportResponse)

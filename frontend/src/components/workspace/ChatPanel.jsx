@@ -6,7 +6,7 @@ import remarkGfm from 'remark-gfm'
 import TextareaAutosize from 'react-textarea-autosize'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { Send, Square, Check, Copy, Sparkles, Bot, User, RefreshCcw, ArrowRight } from 'lucide-react'
+import { Send, Square, Check, Copy, Sparkles, Bot, User, RefreshCcw, ArrowRight, Trash2 } from 'lucide-react'
 import { FileIcon } from './FileTree'
 import { cn } from '../../lib/utils'
 
@@ -88,35 +88,73 @@ const CodeBlock = ({ node, inline, className, children, ...props }) => {
   )
 }
 
+function groupCitationsByFile(citations) {
+  if (!citations || !Array.isArray(citations)) return []
+  const map = new Map()
+  for (const cit of citations) {
+    if (!cit || !cit.path) continue
+    if (!map.has(cit.path)) {
+      map.set(cit.path, {
+        ...cit,
+        ranges: cit.start_line ? [{ start: cit.start_line, end: cit.end_line }] : []
+      })
+    } else {
+      const existing = map.get(cit.path)
+      if (cit.start_line && !existing.ranges.some(r => r.start === cit.start_line && r.end === cit.end_line)) {
+        existing.ranges.push({ start: cit.start_line, end: cit.end_line })
+      }
+    }
+  }
+  return Array.from(map.values())
+}
+
 function CitationCard({ citation, files, openFile }) {
   const file = files.find(f => f.path === citation.path)
+  const fileName = citation.path.split('/').pop()
+  const dirPath = citation.path.split('/').slice(0, -1).join('/')
+
+  // Format line ranges
+  const sortedRanges = (citation.ranges || []).slice().sort((a, b) => a.start - b.start)
+  const lineText = sortedRanges.length > 0
+    ? sortedRanges.map(r => r.start === r.end ? `L${r.start}` : `L${r.start}–${r.end}`).join(', ')
+    : citation.start_line
+      ? (citation.start_line === citation.end_line ? `L${citation.start_line}` : `L${citation.start_line}–${citation.end_line}`)
+      : null
   
   return (
     <button
       onClick={() => openFile && file && openFile(file)}
-      className="flex items-start gap-3 rounded-lg border border-border/50 bg-secondary/10 p-3 text-left transition-colors hover:bg-accent/10 hover:border-accent/30 w-full mb-2"
+      className="flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-secondary/10 px-3 py-2 text-left transition-all hover:bg-accent/10 hover:border-accent/30 w-full group"
     >
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-secondary/50">
-        <FileIcon path={citation.path} className="h-5 w-5" />
+      <div className="flex items-center gap-3 min-w-0 flex-1">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-secondary/50 group-hover:bg-accent/20 transition-colors">
+          <FileIcon path={citation.path} className="h-4 w-4" />
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-xs font-medium text-foreground group-hover:text-accent transition-colors">{fileName}</span>
+          <span className="truncate text-[11px] text-muted-foreground" title={citation.path}>
+            {dirPath ? dirPath : citation.path}
+          </span>
+        </div>
       </div>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-sm font-medium text-foreground">{citation.path.split('/').pop()}</span>
-        <span className="truncate text-xs text-muted-foreground">
-          {citation.path} • Lines {citation.start_line}–{citation.end_line}
+      {lineText && (
+        <span className="shrink-0 rounded bg-secondary/70 px-2 py-0.5 font-mono text-[10px] text-muted-foreground border border-border/40 max-w-[40%] truncate" title={lineText}>
+          {lineText}
         </span>
-      </div>
+      )}
     </button>
   )
 }
 
 function AnswerBlock({ answer }) {
   if (!answer) return null
+  const text = answer.content || answer.answer || ''
   const fmt = answer.format ?? 'text'
   
   if (fmt === 'mermaid') {
     return (
       <div className="my-2">
-        <MermaidDiagram chart={answer.answer} />
+        <MermaidDiagram chart={text} />
       </div>
     )
   }
@@ -134,16 +172,16 @@ function AnswerBlock({ answer }) {
             ol: ({node, ...props}) => <ol {...props} className="mb-4 list-decimal pl-4 last:mb-0" />,
           }}
         >
-          {answer.answer}
+          {text}
         </ReactMarkdown>
       </div>
     )
   }
   
-  return <p className="whitespace-pre-wrap leading-relaxed text-sm">{answer.answer}</p>
+  return <p className="whitespace-pre-wrap leading-relaxed text-sm">{text}</p>
 }
 
-export function ChatPanel({ repo, files, messages, question, setQuestion, ask, busy, error, openFile }) {
+export function ChatPanel({ repo, files, messages, question, setQuestion, ask, busy, error, openFile, clearChat }) {
   const scrollRef = useRef(null)
 
   useEffect(() => {
@@ -185,12 +223,24 @@ export function ChatPanel({ repo, files, messages, question, setQuestion, ask, b
           <Sparkles size={14} className="text-accent" />
           <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">CodeSense AI</span>
         </div>
-        <div className="flex items-center gap-1.5">
-          <span className="relative flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75"></span>
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-success"></span>
-          </span>
-          <span className="text-[10px] text-muted-foreground uppercase">Ready</span>
+        <div className="flex items-center gap-2.5">
+          {messages.length > 0 && clearChat && (
+            <button
+              onClick={clearChat}
+              title="Clear chat history"
+              className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-destructive transition-colors rounded px-1.5 py-0.5 hover:bg-destructive/10"
+            >
+              <Trash2 size={12} />
+              <span className="hidden sm:inline">Clear</span>
+            </button>
+          )}
+          <div className="flex items-center gap-1.5">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75"></span>
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-success"></span>
+            </span>
+            <span className="text-[10px] text-muted-foreground uppercase">Ready</span>
+          </div>
         </div>
       </div>
 
@@ -260,23 +310,27 @@ export function ChatPanel({ repo, files, messages, question, setQuestion, ask, b
                         <div className="text-foreground pl-8">
                           <AnswerBlock answer={msg} />
                           
-                          {msg.citations && msg.citations.length > 0 && (
-                            <div className="mt-4 border-t border-border/50 pt-4">
-                              <span className="mb-3 block text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                                Sources Referenced
-                              </span>
-                              <div className="flex flex-col gap-1">
-                                {msg.citations.map((cit, i) => (
-                                  <CitationCard 
-                                    key={i} 
-                                    citation={cit} 
-                                    files={files} 
-                                    openFile={openFile} 
-                                  />
-                                ))}
+                          {msg.citations && msg.citations.length > 0 && (() => {
+                            const uniqueCitations = groupCitationsByFile(msg.citations)
+                            if (uniqueCitations.length === 0) return null
+                            return (
+                              <div className="mt-4 border-t border-border/50 pt-3">
+                                <span className="mb-2 block text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                                  Sources Referenced {uniqueCitations.length > 1 ? `(${uniqueCitations.length})` : ''}
+                                </span>
+                                <div className="flex flex-col gap-1">
+                                  {uniqueCitations.map((cit, i) => (
+                                    <CitationCard 
+                                      key={cit.path || i} 
+                                      citation={cit} 
+                                      files={files} 
+                                      openFile={openFile} 
+                                    />
+                                  ))}
+                                </div>
                               </div>
-                            </div>
-                          )}
+                            )
+                          })()}
                           
                           {isLastAssistant && !busy && (
                             <div className="mt-2 flex items-center justify-start opacity-0 transition-opacity group-hover:opacity-100">

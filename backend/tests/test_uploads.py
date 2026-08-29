@@ -500,3 +500,136 @@ def test_flow_synthesis_returns_mermaid_and_steps(tmp_path):
     for step in body["steps"]:
         assert step["function_name"]
         assert step["path"]
+
+
+def test_auth_signup_login_profile_and_logout(tmp_path):
+    client, store = client_for(tmp_path)
+
+    # 1. Signup
+    signup_resp = client.post(
+        "/api/auth/signup",
+        json={"email": "alice@example.com", "username": "alice", "password": "securepassword123"}
+    )
+    assert signup_resp.status_code == 201, signup_resp.text
+    signup_data = signup_resp.json()
+    assert "token" in signup_data
+    assert signup_data["user"]["email"] == "alice@example.com"
+    token = signup_data["token"]
+
+    # 2. Get Me
+    me_resp = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert me_resp.status_code == 200
+    assert me_resp.json()["username"] == "alice"
+
+    # 3. Update Profile
+    prof_resp = client.put(
+        "/api/auth/profile",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"username": "alice_updated", "avatar_url": "https://example.com/avatar.png"}
+    )
+    assert prof_resp.status_code == 200
+    assert prof_resp.json()["username"] == "alice_updated"
+    assert prof_resp.json()["avatar_url"] == "https://example.com/avatar.png"
+
+    # 4. Login with correct password
+    login_resp = client.post(
+        "/api/auth/login",
+        json={"email": "alice@example.com", "password": "securepassword123"}
+    )
+    assert login_resp.status_code == 200
+    assert "token" in login_resp.json()
+
+    # 5. Login with incorrect password
+    bad_login_resp = client.post(
+        "/api/auth/login",
+        json={"email": "alice@example.com", "password": "wrongpassword"}
+    )
+    assert bad_login_resp.status_code == 401
+
+    # 6. Logout
+    logout_resp = client.post("/api/auth/logout", headers={"Authorization": f"Bearer {token}"})
+    assert logout_resp.status_code == 204
+
+    # 7. Access /me after logout
+    unauth_resp = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert unauth_resp.status_code == 401
+    app.dependency_overrides.clear()
+
+
+def test_chat_messages_persistence_and_clear(tmp_path):
+    client, store = client_for(tmp_path)
+    upload = store.create_git_url("https://github.com/fastapi/fastapi")
+
+    # Initially empty messages
+    get_resp = client.get(f"/api/uploads/{upload.id}/messages")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["messages"] == []
+
+    # Directly add user & assistant message via storage
+    store.add_chat_message(upload.id, "user", "What does this repo do?")
+    store.add_chat_message(upload.id, "assistant", "It is a modern web framework.", format="markdown", citations=[{"path": "main.py", "start_line": 1, "end_line": 10}])
+
+    # Fetch messages
+    get_resp2 = client.get(f"/api/uploads/{upload.id}/messages")
+    assert get_resp2.status_code == 200
+    msgs = get_resp2.json()["messages"]
+    assert len(msgs) == 2
+    assert msgs[0]["role"] == "user"
+    assert msgs[0]["content"] == "What does this repo do?"
+    assert msgs[1]["role"] == "assistant"
+    assert len(msgs[1]["citations"]) == 1
+
+    # Clear messages
+    del_resp = client.delete(f"/api/uploads/{upload.id}/messages")
+    assert del_resp.status_code == 204
+
+    # Verify cleared
+    get_resp3 = client.get(f"/api/uploads/{upload.id}/messages")
+    assert get_resp3.status_code == 200
+    assert get_resp3.json()["messages"] == []
+    app.dependency_overrides.clear()
+
+
+def test_user_repository_isolation(tmp_path):
+    client, store = client_for(tmp_path)
+
+    # 1. Signup User A and User B
+    resp_a = client.post("/api/auth/signup", json={"email": "userA@example.com", "username": "userA", "password": "passwordA123"})
+    token_a = resp_a.json()["token"]
+
+    resp_b = client.post("/api/auth/signup", json={"email": "userB@example.com", "username": "userB", "password": "passwordB123"})
+    token_b = resp_b.json()["token"]
+
+    # 2. User A creates a repo
+    upload_a = client.post(
+        "/api/uploads/git",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json={"url": "https://github.com/tiangolo/fastapi"}
+    )
+    assert upload_a.status_code == 201
+
+    # 3. User B creates a different repo
+    upload_b = client.post(
+        "/api/uploads/git",
+        headers={"Authorization": f"Bearer {token_b}"},
+        json={"url": "https://github.com/psf/requests"}
+    )
+    assert upload_b.status_code == 201
+
+    # 4. User A lists repos -> should only see User A's repo
+    list_a = client.get("/api/uploads", headers={"Authorization": f"Bearer {token_a}"})
+    assert list_a.status_code == 200
+    repos_a = list_a.json()["uploads"]
+    assert len(repos_a) == 1
+    assert "fastapi" in repos_a[0]["original_name"]
+
+    # 5. User B lists repos -> should only see User B's repo
+    list_b = client.get("/api/uploads", headers={"Authorization": f"Bearer {token_b}"})
+    assert list_b.status_code == 200
+    repos_b = list_b.json()["uploads"]
+    assert len(repos_b) == 1
+    assert "requests" in repos_b[0]["original_name"]
+    app.dependency_overrides.clear()
+
+
+

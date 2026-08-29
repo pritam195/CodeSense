@@ -144,3 +144,44 @@ class FlowSynthesisResponse(BaseModel):
     mermaid_diagram: str
     prose_summary: str
     citations: list[Citation]
+
+# User Authentication & Profile Models
+class UserSignupRequest(BaseModel):
+    email: str
+    username: str
+    password: str
+    avatar_url: str | None = None
+
+class UserLoginRequest(BaseModel):
+    email: str
+    password: str
+
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    username: str
+    avatar_url: str | None = None
+    created_at: str
+
+class AuthTokenResponse(BaseModel):
+    token: str
+    user: UserResponse
+
+class UserProfileUpdateRequest(BaseModel):
+    username: str | None = None
+    avatar_url: str | None = None
+
+# Chat History Persistence Models
+class ChatMessage(BaseModel):
+    id: str
+    upload_id: str
+    role: Literal["user", "assistant"]
+    content: str
+    format: Literal["text", "markdown", "mermaid"] = "text"
+    citations: list[Citation] = []
+    created_at: str
+
+class ChatHistoryResponse(BaseModel):
+    upload_id: str
+    messages: list[ChatMessage]
+
