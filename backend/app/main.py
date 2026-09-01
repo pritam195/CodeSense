@@ -188,11 +188,18 @@ def list_chunks(upload_id: str, store: UploadStore = Depends(get_store)) -> Chun
 
 @app.post("/api/uploads/{upload_id}/embed", response_model=EmbeddingResponse)
 def embed_upload(upload_id: str, store: UploadStore = Depends(get_store), client: EmbeddingClient = Depends(get_embedding_client)) -> EmbeddingResponse:
+    if store.get_upload(upload_id) is None:
+        raise HTTPException(404, "Upload not found.")
     chunks = store.list_chunks(upload_id)
-    if not chunks: raise HTTPException(409, "Create chunks before embedding.")
-    vectors = client.encode_documents([f"File: {chunk[0]}\n{chunk[3]}" for chunk in chunks])
-    FaissIndexStore(settings.data_dir).write(upload_id, vectors)
-    return EmbeddingResponse(upload_id=upload_id, vectors_indexed=len(chunks))
+    if not chunks:
+        raise HTTPException(409, "Create chunks before embedding.")
+    try:
+        texts = [f"File: {chunk[0]}\n{chunk[3]}" for chunk in chunks]
+        vectors = client.encode_documents(texts)
+        FaissIndexStore(store.data_dir).write(upload_id, vectors)
+        return EmbeddingResponse(upload_id=upload_id, vectors_indexed=len(chunks))
+    except Exception as e:
+        raise HTTPException(500, f"Embedding generation failed: {str(e)}")
 
 @app.post("/api/uploads/{upload_id}/similarity-search", response_model=SimilarityResponse)
 def raw_similarity_search(upload_id: str, request: SimilarityRequest, store: UploadStore = Depends(get_store), client: EmbeddingClient = Depends(get_embedding_client)) -> SimilarityResponse:

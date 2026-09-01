@@ -12,22 +12,29 @@ class EmbeddingClient:
     def encode_documents(self, texts): return self._encode(texts, "document")
     def encode_query(self, text): return self._encode([text], "query")[0]
     def _encode(self, texts, mode):
-        if any(len(text) > self.max_chars for text in texts): raise ValueError("Chunk exceeds embedding input limit.")
+        if not texts:
+            return np.empty((0, 384), dtype="float32")
+        if any(len(text) > self.max_chars for text in texts):
+            raise ValueError("Chunk exceeds embedding input limit.")
         with self._lock:
-            delay=self.min_interval_seconds-(monotonic()-self._last_call)
-            if delay > 0: sleep(delay)
+            delay = self.min_interval_seconds - (monotonic() - self._last_call)
+            if delay > 0:
+                sleep(delay)
             if self._model is None:
                 from sentence_transformers import SentenceTransformer
-                self._model=SentenceTransformer(self.model_name)
-                self._model.max_seq_length=256
+                self._model = SentenceTransformer(self.model_name)
+                self._model.max_seq_length = 256
             if hasattr(self._model, "encode_document") and mode == "document":
                 raw_vectors = self._model.encode_document(texts, normalize_embeddings=True)
             elif hasattr(self._model, "encode_query") and mode == "query":
                 raw_vectors = self._model.encode_query(texts, normalize_embeddings=True)
             else:
-                raw_vectors = self._model.encode(texts, normalize_embeddings=True)
+                raw_vectors = self._model.encode(texts, normalize_embeddings=True, batch_size=32, show_progress_bar=False)
             vectors = np.asarray(raw_vectors, dtype="float32")
-            self._last_call=monotonic(); return vectors
+            if len(vectors.shape) == 1:
+                vectors = vectors.reshape(1, -1)
+            self._last_call = monotonic()
+            return vectors
 
 class FaissIndexStore:
     def __init__(self, data_dir: Path): self.directory=data_dir/"indices"; self.directory.mkdir(parents=True, exist_ok=True)
