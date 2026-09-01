@@ -32,6 +32,8 @@ embedding_client = EmbeddingClient(settings.embedding_model, settings.embedding_
 answer_client = AnswerClient(settings.openai_api_key, settings.answer_model)
 cors_origins = list(settings.cors_origins)
 
+app = FastAPI(title="CodeSense API", version="0.3.0")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins if cors_origins else ["*"],
