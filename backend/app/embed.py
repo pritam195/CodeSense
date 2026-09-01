@@ -41,4 +41,7 @@ class FaissIndexStore:
     def write(self, upload_id, vectors):
         index=faiss.IndexFlatIP(vectors.shape[1]); index.add(vectors); faiss.write_index(index, str(self.directory/f"{upload_id}.faiss"))
     def search(self, upload_id, vector, limit):
-        index=faiss.read_index(str(self.directory/f"{upload_id}.faiss")); scores, ids=index.search(np.asarray([vector], dtype="float32"), limit); return [(int(i), float(score)) for i, score in zip(ids[0], scores[0]) if i >= 0]
+        index_path = self.directory / f"{upload_id}.faiss"
+        if not index_path.exists():
+            raise RuntimeError("FAISS index not found. Run /embed first.")
+        index=faiss.read_index(str(index_path)); scores, ids=index.search(np.asarray([vector], dtype="float32"), limit); return [(int(i), float(score)) for i, score in zip(ids[0], scores[0]) if i >= 0]
