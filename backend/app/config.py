@@ -23,7 +23,7 @@ class Settings:
     source_extensions: frozenset[str] = frozenset({".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".go", ".rs", ".rb", ".php", ".cs", ".cpp", ".c", ".h", ".hpp", ".swift", ".kt", ".kts", ".scala", ".sh", ".sql", ".html", ".css", ".json", ".yaml", ".yml", ".md"})
     cors_origins: tuple[str, ...] = tuple(
         origin.strip()
-        for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
+        for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173,https://codesense-v10.vercel.app").split(",")
         if origin.strip()
     )
 

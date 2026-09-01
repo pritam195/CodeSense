@@ -30,8 +30,16 @@ from .storage import UploadStore
 settings = Settings()
 embedding_client = EmbeddingClient(settings.embedding_model, settings.embedding_max_chars, settings.embedding_min_interval_seconds)
 answer_client = AnswerClient(settings.openai_api_key, settings.answer_model)
-app = FastAPI(title="CodeSense API", version="0.3.0")
-app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$", allow_methods=["*"], allow_headers=["*"])
+cors_origins = list(settings.cors_origins)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins if cors_origins else ["*"],
+    allow_origin_regex=r"^(https:\/\/.*\.vercel\.app|https:\/\/.*\.onrender\.com|http:\/\/(localhost|127\.0\.0\.1)(:\d+)?)$",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def get_embedding_client() -> EmbeddingClient:
     return embedding_client
