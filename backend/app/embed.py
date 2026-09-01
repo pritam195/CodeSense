@@ -20,8 +20,13 @@ class EmbeddingClient:
                 from sentence_transformers import SentenceTransformer
                 self._model=SentenceTransformer(self.model_name)
                 self._model.max_seq_length=256
-            method=self._model.encode_document if mode == "document" else self._model.encode_query
-            vectors=np.asarray(method(texts, normalize_embeddings=True), dtype="float32")
+            if hasattr(self._model, "encode_document") and mode == "document":
+                raw_vectors = self._model.encode_document(texts, normalize_embeddings=True)
+            elif hasattr(self._model, "encode_query") and mode == "query":
+                raw_vectors = self._model.encode_query(texts, normalize_embeddings=True)
+            else:
+                raw_vectors = self._model.encode(texts, normalize_embeddings=True)
+            vectors = np.asarray(raw_vectors, dtype="float32")
             self._last_call=monotonic(); return vectors
 
 class FaissIndexStore:
