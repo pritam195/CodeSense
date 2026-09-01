@@ -1,4 +1,4 @@
-﻿<div align="center">
+<div align="center">
 
 # 🔍 CodeSense
 
@@ -8,7 +8,7 @@
 [![React](https://img.shields.io/badge/React-18-61dafb?style=flat-square&logo=react&logoColor=black)](https://react.dev)
 [![Neo4j](https://img.shields.io/badge/Neo4j-5-008CC1?style=flat-square&logo=neo4j&logoColor=white)](https://neo4j.com)
 [![Python](https://img.shields.io/badge/Python-3.12-3776ab?style=flat-square&logo=python&logoColor=white)](https://python.org)
-[![Tests](https://img.shields.io/badge/Tests-19%20passing-22c55e?style=flat-square&logo=pytest)](backend/tests/)
+[![Tests](https://img.shields.io/badge/Tests-22%20passing-22c55e?style=flat-square&logo=pytest)](backend/tests/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ed?style=flat-square&logo=docker&logoColor=white)](docker-compose.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
@@ -255,7 +255,7 @@ CodeSense/
 - [ ] Interactive D3.js call/dependency graph viewer in the UI
 - [ ] Streaming LLM answers via Server-Sent Events
 - [ ] Incremental indexing (re-index only changed files)
-- [ ] JWT auth + per-user repository isolation
+- [x] JWT / PBKDF2 session auth + per-user repository isolation
 - [ ] GitHub App webhook for automatic indexing on push
 - [ ] FAISS `IndexIVFFlat` for repos with > 100k chunks
 
